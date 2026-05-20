@@ -1,0 +1,207 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ----------------------------------------------------
+    // HELPERS
+    // ----------------------------------------------------
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && 
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // ----------------------------------------------------
+    // ENTITY VALIDATORS
+    // ----------------------------------------------------
+    function isValidUser(data) {
+      return (request.method == 'create' ? 
+               data.keys().hasAll(['uid', 'displayName', 'email', 'createdAt']) && data.uid == request.auth.uid : 
+               true) &&
+             (!('uid' in data) || data.uid == request.auth.uid) &&
+             (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 100)) &&
+             (!('email' in data) || (data.email is string && data.email.size() <= 200)) &&
+             (!('role' in data) || (data.role is string && (data.role == 'user' || (data.role == 'admin' && isAdmin()))));
+    }
+
+    function isValidPost(data) {
+      return data.keys().hasAll(['authorId', 'authorName', 'authorPhoto', 'content', 'likesCount', 'commentsCount', 'createdAt']) &&
+             data.keys().size() <= 11 &&
+             data.authorId == request.auth.uid &&
+             (!('location' in data) || (
+               data.location.keys().hasAll(['latitude', 'longitude', 'addressName']) &&
+               data.location.latitude is number &&
+               data.location.longitude is number &&
+               data.location.addressName is string
+             )) &&
+             data.authorName is string && data.authorName.size() <= 100 &&
+             data.content is string && data.content.size() <= 5000 &&
+             data.likesCount is int && data.likesCount >= 0 &&
+             data.commentsCount is int && data.commentsCount >= 0 &&
+             (request.method == 'create' ? data.createdAt == request.time : true);
+    }
+
+    function isValidComment(data) {
+      return data.keys().hasAll(['postId', 'authorId', 'authorName', 'authorPhoto', 'content', 'createdAt']) &&
+             data.keys().size() >= 6 && data.keys().size() <= 7 &&
+             data.authorId == request.auth.uid &&
+             data.content is string && data.content.size() <= 1000 &&
+             data.createdAt == request.time;
+    }
+
+    function isValidLike(data) {
+      return data.keys().hasAll(['postId', 'userId', 'createdAt']) &&
+             data.keys().size() == 3 &&
+             data.userId == request.auth.uid &&
+             data.createdAt == request.time;
+    }
+
+    function isValidNotification(data) {
+      return data.keys().hasAll(['recipientId', 'senderId', 'senderName', 'type', 'postId', 'read', 'createdAt']) &&
+             data.keys().size() >= 6 &&
+             data.senderId == request.auth.uid &&
+             data.read == false &&
+             data.createdAt == request.time;
+    }
+
+    function isValidFollow(data) {
+      return data.keys().hasAll(['followerId', 'followingId', 'createdAt']) &&
+             data.keys().size() == 3 &&
+             data.followerId == request.auth.uid &&
+             data.createdAt == request.time;
+    }
+
+    function isValidConversation(data) {
+      return data.keys().hasAll(['participants', 'updatedAt']) &&
+             request.auth.uid in data.participants &&
+             data.participants.size() == 2;
+    }
+
+    function isValidMessage(data) {
+      return data.keys().hasAll(['senderId', 'content', 'createdAt']) &&
+             data.senderId == request.auth.uid &&
+             data.content is string && data.content.size() <= 2000 &&
+             data.createdAt == request.time;
+    }
+
+    // ----------------------------------------------------
+    // DEFAULT DENY
+    // ----------------------------------------------------
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ----------------------------------------------------
+    // COLLECTIONS
+    // ----------------------------------------------------
+
+    // Users
+    match /users/{userId} {
+      allow read: if true;
+      allow create: if isOwner(userId) && isValidUser(request.resource.data);
+      allow update: if isOwner(userId) && 
+                      isValidUser(request.resource.data);
+    }
+
+    // Posts
+    match /posts/{postId} {
+      allow read: if true;
+      allow create: if isSignedIn() && isValidPost(request.resource.data);
+      allow update: if isSignedIn() && (
+        // Action: Edit post (by owner or admin)
+        ((isOwner(resource.data.authorId) || isAdmin()) && 
+         isValidPost(request.resource.data) && 
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['content', 'mediaUrl', 'location'])) ||
+        // Action: Atomic increment of likes (by anyone signed in)
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likesCount']) &&
+         request.resource.data.likesCount == resource.data.likesCount + 1 || 
+         request.resource.data.likesCount == resource.data.likesCount - 1) ||
+        // Action: Atomic increment of comments (by anyone signed in)
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['commentsCount']) &&
+         request.resource.data.commentsCount == resource.data.commentsCount + 1)
+      );
+      allow delete: if isSignedIn() && (isOwner(resource.data.authorId) || isAdmin());
+
+      // Comments sub-collection
+      match /comments/{commentId} {
+        allow read: if true;
+        allow create: if isSignedIn() && isValidComment(request.resource.data) &&
+                        existsAfter(/databases/$(database)/documents/posts/$(postId));
+        allow update: if isSignedIn() && (
+          // Update reactions (via transaction)
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions']) ||
+          // Edit own comment or admin
+          (isOwner(resource.data.authorId) || isAdmin())
+        );
+        allow delete: if isSignedIn() && (isOwner(resource.data.authorId) || isAdmin() || isOwner(get(/databases/$(database)/documents/posts/$(postId)).data.authorId));
+
+        match /reactions/{userId} {
+          allow read: if true;
+          allow create, delete: if isOwner(userId) && existsAfter(/databases/$(database)/documents/posts/$(postId)/comments/$(commentId));
+          allow update: if isOwner(userId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['emoji', 'updatedAt']);
+        }
+      }
+
+      // Likes sub-collection
+      match /likes/{userId} {
+        allow read: if true;
+        allow create: if isOwner(userId) && isValidLike(request.resource.data) &&
+                        existsAfter(/databases/$(database)/documents/posts/$(postId));
+        allow delete: if isOwner(userId) &&
+                        existsAfter(/databases/$(database)/documents/posts/$(postId));
+      }
+    }
+
+    // Notifications
+    match /notifications/{notificationId} {
+      allow read: if isSignedIn() && isOwner(resource.data.recipientId);
+      allow create: if isSignedIn() && isValidNotification(request.resource.data);
+      allow update: if isSignedIn() && isOwner(resource.data.recipientId) && 
+                      request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
+      allow delete: if isSignedIn() && isOwner(resource.data.recipientId);
+    }
+
+    match /users/{userId}/likedPosts/{postId} {
+      allow read: if true;
+      allow create: if isOwner(userId);
+      allow delete: if isOwner(userId);
+    }
+
+    // Following / Followers
+    match /users/{userId}/following/{followingId} {
+      allow read: if true;
+      allow create: if isSignedIn() && userId == request.auth.uid && isValidFollow(request.resource.data);
+      allow delete: if isSignedIn() && userId == request.auth.uid;
+    }
+
+    match /users/{userId}/followers/{followerId} {
+      allow read: if true;
+      // We don't allow direct creation/deletion here, should be handled by transaction or logically matched.
+      // But for simplicity in this app without Cloud Functions, we allow matching creation.
+      allow create: if isSignedIn() && followerId == request.auth.uid && isValidFollow(request.resource.data);
+      allow delete: if isSignedIn() && followerId == request.auth.uid;
+    }
+
+    // Conversations & Messages
+    match /conversations/{conversationId} {
+      allow read: if isSignedIn() && request.auth.uid in resource.data.participants;
+      allow create: if isSignedIn() && isValidConversation(request.resource.data);
+      allow update: if isSignedIn() && request.auth.uid in resource.data.participants;
+      
+      match /messages/{messageId} {
+        allow read: if isSignedIn() && request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants;
+        allow create: if isSignedIn() && request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants && isValidMessage(request.resource.data);
+      }
+    }
+  }
+}

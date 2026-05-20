@@ -1,0 +1,1443 @@
+import React from 'react';
+import { motion, AnimatePresence } from 'motion/react';
+import { LogIn, LogOut, User as UserIcon, PlusCircle, MessageSquare, ThumbsUp, Trash2, Send, Image as ImageIcon, Bell, Search, UserPlus, Edit2, Share2, Check, MapPin } from 'lucide-react';
+import { useAuthState } from 'react-firebase-hooks/auth';
+import { useCollection, useDocument } from 'react-firebase-hooks/firestore';
+import { auth, googleProvider } from '../lib/firebase';
+import { signInWithPopup, signOut, createUserWithEmailAndPassword, signInWithEmailAndPassword, updateProfile } from 'firebase/auth';
+import { forumService } from '../services/forumService';
+import { collection, query, orderBy, where, doc, deleteDoc, limit, getDoc } from 'firebase/firestore';
+import { db } from '../lib/firebase';
+import { formatDistanceToNow } from 'date-fns';
+import { Link } from 'react-router-dom';
+
+// Notification Bell Component
+export function Notifications() {
+  const [user] = useAuthState(auth);
+  const [isOpen, setIsOpen] = React.useState(false);
+
+  // Listen for unread notifications
+  const [snapshot] = useCollection(
+    user 
+      ? query(
+          collection(db, 'notifications'), 
+          where('recipientId', '==', user.uid),
+          orderBy('createdAt', 'desc'),
+          limit(20)
+        )
+      : null
+  );
+
+  const notifications = snapshot?.docs.map(doc => ({ id: doc.id, ...doc.data() })) || [];
+  const unreadCount = notifications.filter((n: any) => !n.read).length;
+
+  const markAllAsRead = async () => {
+    notifications.forEach((n: any) => {
+      if (!n.read) forumService.markNotificationAsRead(n.id);
+    });
+  };
+
+  return (
+    <div className="relative">
+      <button 
+        onClick={() => {
+          setIsOpen(!isOpen);
+          if (!isOpen && unreadCount > 0) markAllAsRead();
+        }}
+        className="relative p-2 text-natural-primary hover:bg-natural-bg rounded-full transition-colors"
+      >
+        <Bell size={22} />
+        {unreadCount > 0 && (
+          <span className="absolute top-1 right-1 w-4 h-4 bg-red-500 text-white text-[10px] font-bold flex items-center justify-center rounded-full border-2 border-white">
+            {unreadCount}
+          </span>
+        )}
+      </button>
+
+      <AnimatePresence>
+        {isOpen && (
+          <>
+            <div 
+              className="fixed inset-0 z-40" 
+              onClick={() => setIsOpen(false)} 
+            />
+            <motion.div
+              initial={{ opacity: 0, y: 10, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 10, scale: 0.95 }}
+              className="absolute right-0 mt-2 w-72 bg-white rounded-2xl shadow-xl border border-natural-border z-50 overflow-hidden"
+            >
+              <div className="p-4 border-b border-natural-bg flex justify-between items-center">
+                <span className="text-sm font-bold">通知中心</span>
+                {unreadCount > 0 && (
+                  <button onClick={markAllAsRead} className="text-[10px] text-natural-primary font-bold uppercase tracking-wider">
+                    全部已读
+                  </button>
+                )}
+              </div>
+              <div className="max-h-64 overflow-y-auto">
+                {notifications.length > 0 ? (
+                  notifications.map((n: any) => (
+                    <Link 
+                      key={n.id} 
+                      to={`/profile/${n.senderId}`}
+                      className={`block p-3 border-b border-natural-bg last:border-0 transition-colors ${n.read ? 'opacity-60 bg-white' : 'bg-natural-bg/20'}`}
+                    >
+                      <div className="flex gap-2">
+                        <span className="text-sm shrink-0">
+                          {n.type === 'like' ? '❤️' : n.type === 'comment' ? '💬' : '👤'}
+                        </span>
+                        <div className="space-y-0.5">
+                          <p className="text-xs text-natural-text">
+                            <span className="font-bold">{n.senderName}</span> {n.type === 'like' ? '赞了你的动态' : n.type === 'comment' ? '评论了你的动态' : '关注了你'}
+                          </p>
+                          <p className="text-[9px] text-natural-muted font-medium uppercase">
+                            {n.createdAt?.toDate ? formatDistanceToNow(n.createdAt.toDate(), { addSuffix: true }) : '刚刚'}
+                          </p>
+                        </div>
+                      </div>
+                    </Link>
+                  ))
+                ) : (
+                  <div className="p-8 text-center text-xs text-natural-muted italic">
+                    暂无通知
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+// Global Message Badge
+function MessageBadge({ userId }: { userId: string }) {
+  const [snapshot] = useCollection(
+    query(
+      collection(db, 'conversations'),
+      where('participants', 'array-contains', userId)
+    )
+  );
+
+  const conversations = snapshot?.docs.map(doc => doc.data()) || [];
+  const totalUnread = conversations.reduce((acc, conv) => acc + (conv.unreadCount?.[userId] || 0), 0);
+
+  if (totalUnread === 0) return null;
+
+  return (
+    <span className="absolute top-1 right-1 w-4 h-4 bg-natural-primary text-white text-[10px] font-bold flex items-center justify-center rounded-full border-2 border-white">
+      {totalUnread > 9 ? '9+' : totalUnread}
+    </span>
+  );
+}
+
+// Login Modal Component
+export function LoginModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) {
+  const [isRegisterMode, setIsRegisterMode] = React.useState(false);
+  const [email, setEmail] = React.useState('');
+  const [password, setPassword] = React.useState('');
+  const [displayName, setDisplayName] = React.useState('');
+  const [isLoading, setIsLoading] = React.useState(false);
+
+  const loginGoogle = async () => {
+    try {
+      const result = await signInWithPopup(auth, googleProvider);
+      
+      const userDocRef = doc(db, 'users', result.user.uid);
+      const userSnap = await getDoc(userDocRef);
+      
+      if (!userSnap.exists()) {
+        await forumService.createUserProfile({
+          uid: result.user.uid,
+          displayName: result.user.displayName || 'Anonymous',
+          email: result.user.email || '',
+          photoURL: result.user.photoURL || undefined
+        });
+      }
+      onClose();
+    } catch (error: any) {
+      console.error('Google login failed', error);
+      setMessage(error.message || 'Google 登录失败');
+    }
+  };
+
+  const [message, setMessage] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (!isOpen) {
+      setMessage(null);
+      setIsRegisterMode(false);
+      setEmail('');
+      setPassword('');
+      setDisplayName('');
+    }
+  }, [isOpen]);
+
+  const handleEmailAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsLoading(true);
+    setMessage(null);
+
+    try {
+      if (password.length < 6) {
+        throw new Error('密码长度至少需要 6 个字符');
+      }
+      if (isRegisterMode) {
+        if (!displayName.trim()) throw new Error('请输入昵称');
+        const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+        await updateProfile(userCredential.user, { displayName });
+        await forumService.createUserProfile({
+          uid: userCredential.user.uid,
+          displayName: displayName,
+          email: userCredential.user.email!,
+          photoURL: `https://api.dicebear.com/7.x/avataaars/svg?seed=${userCredential.user.uid}`,
+          role: email === 'admin@root.com' ? 'admin' : 'user'
+        });
+      } else {
+        await signInWithEmailAndPassword(auth, email, password);
+      }
+      onClose();
+    } catch (error: any) {
+      console.error('Auth error:', error);
+      let errorMsg = error.message || '认证失败，请检查输入';
+      if (error.code === 'auth/email-already-in-use') errorMsg = '该邮箱已被注册';
+      if (error.code === 'auth/invalid-email') errorMsg = '邮箱格式不正确';
+      if (error.code === 'auth/weak-password') errorMsg = '密码太弱（至少6位）';
+      if (error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password') errorMsg = '邮箱或密码错误';
+      if (error.code === 'auth/operation-not-allowed') errorMsg = '该登录方式尚未启用，请在 Firebase 控制台启用 邮箱/密码 登录。';
+      setMessage(errorMsg);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleQQLogin = () => {
+    setMessage('QQ 登录需要配置 App ID。请在腾讯开放平台申请并配置环境变量。');
+  };
+
+  const handleWeChatLogin = () => {
+    setMessage('微信登录需要配置 App ID。请在微信开放平台申请并配置环境变量。');
+  };
+
+  return (
+    <AnimatePresence>
+      {isOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={onClose}
+            className="absolute inset-0 bg-natural-text/20 backdrop-blur-sm"
+          />
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.9, y: 20 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.9, y: 20 }}
+            className="relative w-full max-w-sm bg-white rounded-[40px] p-8 shadow-2xl border border-natural-border"
+          >
+            <div className="text-center mb-8">
+              <h2 className="text-2xl font-serif font-bold text-natural-primary mb-2">
+                {isRegisterMode ? '创建账户' : '欢迎回来'}
+              </h2>
+              <p className="text-xs text-natural-muted font-medium">加入 ROOT 社区，记录精彩时刻</p>
+            </div>
+
+            {message && (
+              <motion.div 
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: 'auto' }}
+                className="mb-6 p-3 bg-red-50 text-red-600 text-[10px] rounded-xl font-bold leading-relaxed border border-red-100"
+              >
+                {message}
+              </motion.div>
+            )}
+
+            <form onSubmit={handleEmailAuth} className="space-y-4 mb-6">
+              {isRegisterMode && (
+                <input 
+                  type="text"
+                  placeholder="昵称"
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                  className="w-full bg-natural-bg rounded-2xl px-5 py-3 text-xs border border-transparent focus:border-natural-primary/20 outline-none"
+                  required
+                />
+              )}
+              <input 
+                type="email"
+                placeholder="邮箱"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="w-full bg-natural-bg rounded-2xl px-5 py-3 text-xs border border-transparent focus:border-natural-primary/20 outline-none"
+                required
+              />
+              <input 
+                type="password"
+                placeholder="密码"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full bg-natural-bg rounded-2xl px-5 py-3 text-xs border border-transparent focus:border-natural-primary/20 outline-none"
+                required
+              />
+              <button 
+                type="submit"
+                disabled={isLoading}
+                className="w-full py-3 bg-natural-primary text-white rounded-2xl text-xs font-bold shadow-lg shadow-natural-primary/20 hover:opacity-90 disabled:opacity-50 transition-all"
+              >
+                {isLoading ? '加载中...' : (isRegisterMode ? '立即注册' : '登录')}
+              </button>
+            </form>
+
+            <div className="relative flex items-center justify-center mb-6">
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-natural-border"></div>
+              </div>
+              <span className="relative px-4 text-[10px] font-bold text-natural-muted bg-white uppercase tracking-widest">
+                或者
+              </span>
+            </div>
+
+            <div className="space-y-3">
+              <button 
+                onClick={loginGoogle}
+                type="button"
+                className="w-full flex items-center justify-center gap-3 px-6 py-3 bg-white border border-natural-border rounded-2xl text-[11px] font-bold hover:bg-natural-bg transition-all"
+              >
+                <img src="https://www.google.com/favicon.ico" className="w-4 h-4" alt="" />
+                <span>Google 账号快捷登录</span>
+              </button>
+
+              {!isRegisterMode && (
+                <button 
+                  onClick={async () => {
+                    setMessage(null);
+                    setIsLoading(true);
+                    try {
+                      const adminEmail = 'admin@root.com';
+                      const adminPass = 'admin123456';
+                      try {
+                        await signInWithEmailAndPassword(auth, adminEmail, adminPass);
+                      } catch (e: any) {
+                        if (e.code === 'auth/user-not-found' || e.code === 'auth/invalid-credential' || e.code === 'auth/invalid-login-credentials') {
+                          // Try registering if it doesn't exist or credentials fail (in case it was partially created)
+                          try {
+                            const userCredential = await createUserWithEmailAndPassword(auth, adminEmail, adminPass);
+                            await updateProfile(userCredential.user, { displayName: 'ROOT 管理员' });
+                            await forumService.createUserProfile({
+                              uid: userCredential.user.uid,
+                              displayName: 'ROOT 管理员',
+                              email: adminEmail,
+                              photoURL: 'https://api.dicebear.com/7.x/bottts-neutral/svg?seed=admin',
+                              role: 'admin'
+                            });
+                          } catch (regErr: any) {
+                            // If user actually exists but password was wrong, regErr will be email-already-in-use
+                            if (regErr.code === 'auth/email-already-in-use') {
+                              throw new Error('管理员账户已存在但密码错误。');
+                            }
+                            throw regErr;
+                          }
+                        } else {
+                          throw e;
+                        }
+                      }
+                      onClose();
+                    } catch (e: any) {
+                      setMessage(e.message);
+                    } finally {
+                      setIsLoading(false);
+                    }
+                  }}
+                  type="button"
+                  disabled={isLoading}
+                  className="w-full flex items-center justify-center gap-3 px-6 py-2 bg-amber-50 text-amber-700 border border-amber-200 rounded-2xl text-[10px] font-bold hover:bg-amber-100 transition-all uppercase tracking-widest disabled:opacity-50"
+                >
+                  <span>{isLoading ? '连接中...' : '管理员快捷测试登录'}</span>
+                </button>
+              )}
+
+              <div className="grid grid-cols-2 gap-3">
+                <button 
+                  onClick={handleWeChatLogin}
+                  type="button"
+                  className="flex items-center justify-center gap-2 px-4 py-3 bg-[#07C160]/10 text-[#07C160] rounded-2xl text-[11px] font-bold hover:bg-[#07C160]/20 transition-all"
+                >
+                  <MessageSquare size={14} />
+                  <span>微信</span>
+                </button>
+                <button 
+                  onClick={handleQQLogin}
+                  type="button"
+                  className="flex items-center justify-center gap-2 px-4 py-3 bg-[#12B7F5]/10 text-[#12B7F5] rounded-2xl text-[11px] font-bold hover:bg-[#12B7F5]/20 transition-all"
+                >
+                  <PlusCircle size={14} className="rotate-45" />
+                  <span>QQ</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-8 text-center space-y-2">
+              <button 
+                onClick={() => setIsRegisterMode(!isRegisterMode)}
+                className="text-[11px] text-natural-primary font-bold hover:underline"
+              >
+                {isRegisterMode ? '已有账号？立即登录' : '没有账号？创建免费账户'}
+              </button>
+              <button 
+                onClick={onClose}
+                className="block w-full text-[10px] text-natural-muted hover:text-natural-primary transition-colors font-medium uppercase tracking-widest"
+              >
+                稍后再说
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
+    </AnimatePresence>
+  );
+}
+
+// Navbar Component
+export function Navbar({ searchQuery, setSearchQuery }: { searchQuery: string, setSearchQuery: (q: string) => void }) {
+  const [user] = useAuthState(auth);
+  const [isLoginOpen, setIsLoginOpen] = React.useState(false);
+  const [localQuery, setLocalQuery] = React.useState(searchQuery);
+
+  React.useEffect(() => {
+    const handler = setTimeout(() => {
+      setSearchQuery(localQuery);
+    }, 500);
+
+    return () => clearTimeout(handler);
+  }, [localQuery, setSearchQuery]);
+
+  // Sync local query if search query changes externally (e.g. clearing)
+  React.useEffect(() => {
+    setLocalQuery(searchQuery);
+  }, [searchQuery]);
+
+  return (
+    <>
+      <nav className="sticky top-0 z-50 bg-white/50 backdrop-blur-md border-b border-natural-border px-8 py-3">
+        <div className="max-w-5xl mx-auto flex justify-between items-center gap-8">
+          <div className="flex items-center gap-8 flex-1">
+            <Link to="/" className="text-2xl font-serif font-bold text-natural-primary tracking-tight shrink-0 hidden sm:block">
+              ROOTS
+            </Link>
+            
+            <div className="relative flex-1 max-w-md">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-natural-muted w-4 h-4" />
+              <input 
+                type="text" 
+                value={localQuery}
+                onChange={(e) => setLocalQuery(e.target.value)}
+                placeholder="搜索动态或分类..." 
+                className="w-full bg-natural-input/80 rounded-full py-1.5 pl-10 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-natural-primary/20 transition-all font-medium"
+              />
+            </div>
+          </div>
+
+          <div className="flex items-center gap-4">
+            {user ? (
+              <>
+                <Link 
+                  to="/messages" 
+                  className="relative p-2 text-natural-primary hover:bg-natural-bg rounded-full transition-colors"
+                  title="私信"
+                >
+                  <MessageSquare size={22} />
+                  <MessageBadge userId={user.uid} />
+                </Link>
+                <Notifications />
+                <div className="h-4 w-[1px] bg-natural-border mx-1" />
+                <Link to={`/profile/${user.uid}`} className="flex items-center gap-4">
+                  <img src={user.photoURL || undefined} alt="" className="w-10 h-10 rounded-full border-2 border-white shadow-sm" />
+                </Link>
+                <button 
+                  onClick={() => signOut(auth)}
+                  className="flex items-center gap-2 text-sm font-medium text-natural-muted hover:text-red-700 transition-colors"
+                >
+                  <LogOut size={18} />
+                  <span className="hidden sm:inline">退出</span>
+                </button>
+              </>
+            ) : (
+              <button 
+                onClick={() => setIsLoginOpen(true)}
+                className="flex items-center gap-2 px-5 py-2 bg-natural-primary text-white rounded-full text-sm font-medium hover:bg-natural-primary-dark transition-all"
+              >
+                <LogIn size={18} />
+                <span>登录</span>
+              </button>
+            )}
+          </div>
+        </div>
+      </nav>
+      <LoginModal isOpen={isLoginOpen} onClose={() => setIsLoginOpen(false)} />
+    </>
+  );
+}
+
+// Image Zoom Modal
+export function ImageZoomModal({ isOpen, onClose, src }: { isOpen: boolean, onClose: () => void, src: string }) {
+  return (
+    <AnimatePresence>
+      {isOpen && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={onClose}
+            className="absolute inset-0 bg-black/90 backdrop-blur-xl cursor-zoom-out"
+          />
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.9 }}
+            className="relative max-w-7xl max-h-[90vh] w-full flex items-center justify-center pointer-events-none"
+          >
+            <img 
+              src={src} 
+              alt="Zoomed" 
+              className="max-w-full max-h-[90vh] object-contain rounded-xl shadow-2xl pointer-events-auto"
+            />
+            <button 
+              onClick={onClose}
+              className="absolute -top-4 -right-4 p-2 bg-white rounded-full shadow-lg text-natural-text hover:text-natural-primary transition-colors pointer-events-auto"
+            >
+              <PlusCircle className="rotate-45" size={24} />
+            </button>
+          </motion.div>
+        </div>
+      )}
+    </AnimatePresence>
+  );
+}
+
+// CreatePost Component
+export function CreatePost() {
+  const [user] = useAuthState(auth);
+  const [content, setContent] = React.useState('');
+  const [location, setLocation] = React.useState<{ latitude: number, longitude: number, addressName: string } | null>(null);
+  const [isLocating, setIsLocating] = React.useState(false);
+  const [mediaUrl, setMediaUrl] = React.useState('');
+  const [showMediaInput, setShowMediaInput] = React.useState(false);
+  const [isSubmitting, setIsSubmitting] = React.useState(false);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+
+  const fetchLocation = () => {
+    if (!navigator.geolocation) {
+      alert('您的浏览器不支持地理位置服务');
+      return;
+    }
+
+    setIsLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        const { latitude, longitude } = position.coords;
+        try {
+          // In a real app, you would use reverse geocoding here.
+          // For now, we'll just use a placeholder address or coordinates.
+          setLocation({
+            latitude,
+            longitude,
+            addressName: `坐标: ${latitude.toFixed(4)}, ${longitude.toFixed(4)}`
+          });
+        } catch (error) {
+          console.error(error);
+          setLocation({
+            latitude,
+            longitude,
+            addressName: '未知地点'
+          });
+        } finally {
+          setIsLocating(false);
+        }
+      },
+      (error) => {
+        console.error(error);
+        alert('无法获取位置，请检查权限设置');
+        setIsLocating(false);
+      },
+      { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
+    );
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (file.size > 2 * 1024 * 1024) { // 2MB limit for base64
+        alert('图片过大，请选择 2MB 以下的图片');
+        return;
+      }
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setMediaUrl(reader.result as string);
+        setShowMediaInput(true);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!content.trim() || isSubmitting) return;
+
+    setIsSubmitting(true);
+    try {
+      await forumService.createPost(content, location || undefined, mediaUrl);
+      setContent('');
+      setMediaUrl('');
+      setLocation(null);
+      setShowMediaInput(false);
+    } catch (error) {
+      alert('发布失败，请重试');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  if (!user) return null;
+
+  return (
+    <motion.div 
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="bg-white rounded-[32px] p-6 shadow-sm border border-white/40 mb-8"
+    >
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="flex gap-4">
+          <img src={user.photoURL || undefined} alt="" className="w-12 h-12 rounded-full border-2 border-natural-bg" />
+          <div className="flex-1 space-y-3">
+            <textarea
+              value={content}
+              onChange={(e) => setContent(e.target.value)}
+              placeholder="分享你的想法..."
+              className="w-full bg-natural-input rounded-2xl p-4 text-sm focus:outline-none focus:ring-2 focus:ring-natural-primary/10 resize-none h-28"
+            />
+            {location && (
+              <div className="flex items-center gap-2 px-3 py-1 bg-natural-primary/5 rounded-full w-fit">
+                <MapPin size={12} className="text-natural-primary" />
+                <span className="text-[10px] font-bold text-natural-primary">{location.addressName}</span>
+                <button 
+                  type="button" 
+                  onClick={() => setLocation(null)}
+                  className="text-natural-muted hover:text-red-500 transition-colors"
+                >
+                  <PlusCircle size={12} className="rotate-45" />
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+        
+        <AnimatePresence>
+          {showMediaInput && (
+            <motion.div 
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: 'auto', opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              className="overflow-hidden space-y-3"
+            >
+              <div className="relative inline-block w-40 h-40 rounded-2xl overflow-hidden border border-natural-border group">
+                {mediaUrl && <img src={mediaUrl} alt="Preview" className="w-full h-full object-cover" />}
+                <button 
+                  type="button"
+                  onClick={() => setMediaUrl('')}
+                  className="absolute top-2 right-2 p-1.5 bg-black/50 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+              <input
+                type="text"
+                value={mediaUrl}
+                onChange={(e) => setMediaUrl(e.target.value)}
+                placeholder="或者输入图片链接 (URL)..."
+                className="w-full bg-natural-input rounded-xl px-4 py-2 text-[10px] border border-transparent focus:border-natural-border focus:outline-none"
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <div className="flex justify-between items-center pt-2 border-t border-natural-bg">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className={`flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-full transition-colors ${mediaUrl ? 'bg-natural-primary text-white' : 'text-natural-muted hover:bg-natural-bg'}`}
+            >
+              <ImageIcon size={18} />
+              <span className="hidden sm:inline">图片</span>
+            </button>
+            <input 
+              type="file" 
+              ref={fileInputRef} 
+              onChange={handleFileChange} 
+              accept="image/*" 
+              className="hidden" 
+            />
+            
+            <button
+              type="button"
+              onClick={fetchLocation}
+              disabled={isLocating}
+              className={`flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-full transition-colors ${location ? 'bg-natural-primary text-white' : 'text-natural-muted hover:bg-natural-bg'}`}
+            >
+              <MapPin size={18} />
+              <span className="hidden sm:inline">{isLocating ? '获取中...' : '定位'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowMediaInput(!showMediaInput)}
+              className="text-xs text-natural-muted hover:text-natural-primary px-2"
+            >
+              {showMediaInput ? '收起' : 'URL'}
+            </button>
+          </div>
+          <button
+            type="submit"
+            disabled={!content.trim() || isSubmitting}
+            className="bg-natural-primary text-white px-8 py-2 rounded-full text-sm font-medium hover:bg-natural-primary-dark disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-md shadow-natural-primary/20"
+          >
+            {isSubmitting ? '发布中...' : '发布'}
+          </button>
+        </div>
+      </form>
+    </motion.div>
+  );
+}
+
+// Comment Item
+export function CommentItem({ comment, postAuthorId, postId }: { comment: any, postAuthorId: string, postId: string, key?: string }) {
+  const [user] = useAuthState(auth);
+  const [showEmojiPicker, setShowEmojiPicker] = React.useState(false);
+  const [isDeleting, setIsDeleting] = React.useState(false);
+  
+  const REACTION_EMOJIS = ['❤️', '👏', '🔥', '😂', '😮'];
+
+  const handleToggleReaction = async (emoji: string) => {
+    if (!user) return;
+    try {
+      await forumService.toggleCommentReaction(postId, comment.id, emoji);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleDeleteSub = async () => {
+    if (!window.confirm('确定删除这条评论吗？')) return;
+    setIsDeleting(true);
+    try {
+      await forumService.deleteComment(postId, comment.id);
+    } catch (e) {
+      console.error(e);
+      alert('删除失败');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  // Function to linkify mentions (@username)
+  const renderContent = (content: string) => {
+    const parts = content.split(/(@\w+)/g);
+    return parts.map((part, i) => {
+      if (part.startsWith('@')) {
+        const username = part.slice(1);
+        // We don't have user ID here easily, so we link to a search or a common profile route if we had one.
+        // For simplicity, let's assume we can search by username or just style it.
+        return (
+          <span key={i} className="text-natural-primary font-bold cursor-pointer hover:underline">
+            {part}
+          </span>
+        );
+      }
+      return part;
+    });
+  };
+
+  return (
+    <div className="group flex gap-3 py-4 border-b border-natural-bg last:border-0 hover:bg-natural-bg/30 px-3 rounded-2xl transition-colors relative">
+      <Link to={`/profile/${comment.authorId}`}>
+        <img src={comment.authorPhoto} alt="" className="w-9 h-9 rounded-full shrink-0 border border-white" />
+      </Link>
+      <div className="flex-1 min-w-0 space-y-1">
+        <div className="flex justify-between items-start gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Link to={`/profile/${comment.authorId}`} className="text-xs font-bold text-natural-text hover:text-natural-primary truncate">
+              {comment.authorName}
+            </Link>
+            {comment.authorId === postAuthorId && (
+              <span className="text-[9px] bg-natural-primary/10 text-natural-primary px-1.5 py-0.5 rounded-md font-bold uppercase tracking-widest whitespace-nowrap">
+                作者
+              </span>
+            )}
+          </div>
+          <span className="text-[10px] text-natural-muted font-medium whitespace-nowrap">
+            {comment.createdAt?.toDate ? formatDistanceToNow(comment.createdAt.toDate(), { addSuffix: true }) : '刚刚'}
+          </span>
+          {user && (user.uid === comment.authorId || user.uid === postAuthorId) && (
+            <button 
+              onClick={handleDeleteSub}
+              disabled={isDeleting}
+              className="opacity-0 group-hover:opacity-100 p-1 text-natural-muted hover:text-red-500 transition-all rounded-md hover:bg-red-50 ml-1"
+              title="删除评论"
+            >
+              <Trash2 size={12} />
+            </button>
+          )}
+        </div>
+        <p className="text-sm text-natural-text/80 break-words leading-relaxed">
+          {renderContent(comment.content)}
+        </p>
+
+        {/* Reactions Section */}
+        <div className="flex flex-wrap items-center gap-2 mt-2">
+          {comment.reactions && Object.entries(comment.reactions).map(([emoji, count]: [string, any]) => (
+            count > 0 && (
+              <button
+                key={emoji}
+                onClick={() => handleToggleReaction(emoji)}
+                className="flex items-center gap-1 bg-natural-bg/50 px-2 py-0.5 rounded-full text-xs hover:bg-natural-bg transition-colors border border-transparent hover:border-natural-border"
+              >
+                <span>{emoji}</span>
+                <span className="text-[10px] font-bold text-natural-muted">{count}</span>
+              </button>
+            )
+          ))}
+          
+          {user && (
+            <div className="relative">
+              <button 
+                onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+                className="opacity-0 group-hover:opacity-100 p-1 text-natural-muted hover:text-natural-primary transition-all rounded-full hover:bg-natural-bg"
+              >
+                <PlusCircle size={14} />
+              </button>
+              
+              <AnimatePresence>
+                {showEmojiPicker && (
+                  <>
+                    <div className="fixed inset-0 z-10" onClick={() => setShowEmojiPicker(false)} />
+                    <motion.div 
+                      initial={{ opacity: 0, scale: 0.8, y: 5 }}
+                      animate={{ opacity: 1, scale: 1, y: 0 }}
+                      exit={{ opacity: 0, scale: 0.8, y: 5 }}
+                      className="absolute bottom-full left-0 mb-2 bg-white rounded-full shadow-lg border border-natural-border px-2 py-1 flex gap-1 z-20 whitespace-nowrap"
+                    >
+                      {REACTION_EMOJIS.map(emoji => (
+                        <button
+                          key={emoji}
+                          onClick={() => {
+                            handleToggleReaction(emoji);
+                            setShowEmojiPicker(false);
+                          }}
+                          className="hover:scale-125 transition-transform p-1"
+                        >
+                          {emoji}
+                        </button>
+                      ))}
+                    </motion.div>
+                  </>
+                )}
+              </AnimatePresence>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Post Card Component
+export function PostCard({ post }: { post: any, key?: string }) {
+  const [user] = useAuthState(auth);
+  const [showComments, setShowComments] = React.useState(false);
+  const [commentContent, setCommentContent] = React.useState('');
+  const [mentionSuggestions, setMentionSuggestions] = React.useState<any[]>([]);
+  const [showMentions, setShowMentions] = React.useState(false);
+  const [isLiking, setIsLiking] = React.useState(false);
+  const [isFollowLoading, setIsFollowLoading] = React.useState(false);
+  const [isEditing, setIsEditing] = React.useState(false);
+  const [editContent, setEditContent] = React.useState(post.content);
+  const [editMediaUrl, setEditMediaUrl] = React.useState(post.mediaUrl || '');
+  const [isUpdating, setIsUpdating] = React.useState(false);
+  const [showShareToast, setShowShareToast] = React.useState(false);
+  const [isImageZoomed, setIsImageZoomed] = React.useState(false);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+
+  const [userDoc] = useDocument(user ? doc(db, 'users', user.uid) : null);
+  const isAdmin = userDoc?.data()?.role === 'admin';
+  const isAuthor = user?.uid === post.authorId;
+  const canManage = isAuthor || isAdmin;
+
+  // Sync edit state with post props when post changes
+  React.useEffect(() => {
+    setEditContent(post.content);
+    setEditMediaUrl(post.mediaUrl || '');
+  }, [post.content, post.mediaUrl]);
+
+  const handleEditFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (file.size > 2 * 1024 * 1024) {
+        alert('图片过大，请选择 2MB 以下的图片');
+        return;
+      }
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setEditMediaUrl(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleShare = async () => {
+    const shareData = {
+      title: `${post.authorName} 的动态 - ROOTS`,
+      text: post.content.slice(0, 100),
+      url: `${window.location.origin}/profile/${post.authorId}`
+    };
+
+    try {
+      if (navigator.share) {
+        await navigator.share(shareData);
+      } else {
+        await navigator.clipboard.writeText(shareData.url);
+        setShowShareToast(true);
+        setTimeout(() => setShowShareToast(false), 2000);
+      }
+    } catch (err) {
+      console.error('Share failed:', err);
+    }
+  };
+
+  // Check if current user liked this post
+  const [likesSnapshot] = useCollection(
+    user ? query(collection(db, 'posts', post.id, 'likes'), where('userId', '==', user.uid)) : null
+  );
+  const isLiked = (likesSnapshot?.docs.length ?? 0) > 0;
+
+  // Check if following author
+  const [followSnapshot] = useDocument(
+    user ? doc(db, 'users', user.uid, 'following', post.authorId) : null
+  );
+  const isFollowing = followSnapshot?.exists();
+
+  const handleToggleFollow = async () => {
+    if (!user) {
+      alert('请先登录');
+      return;
+    }
+    if (isFollowLoading) return;
+    setIsFollowLoading(true);
+    try {
+      await forumService.toggleFollow(post.authorId, !!isFollowing);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setIsFollowLoading(false);
+    }
+  };
+
+  // Comments stream
+  const [commentsSnapshot] = useCollection(
+    query(collection(db, 'posts', post.id, 'comments'), orderBy('createdAt', 'asc'))
+  );
+  const comments = commentsSnapshot?.docs.map(doc => ({ id: doc.id, ...doc.data() })) || [];
+
+  const handleLike = async () => {
+    if (!user) {
+      alert('请先登录');
+      return;
+    }
+    if (isLiking) return;
+    setIsLiking(true);
+    try {
+      await forumService.toggleLike(post.id);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setIsLiking(false);
+    }
+  };
+
+  const handleCommentSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user) {
+      alert('请先登录');
+      return;
+    }
+    if (!commentContent.trim()) return;
+    try {
+      await forumService.addComment(post.id, commentContent);
+      setCommentContent('');
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (window.confirm('确定删除这条动态吗？')) {
+      try {
+        await forumService.deletePost(post.id);
+      } catch (e) {
+        console.error(e);
+      }
+    }
+  };
+
+  const handleUpdate = async () => {
+    if (!editContent.trim() || isUpdating) return;
+    setIsUpdating(true);
+    try {
+      await forumService.updatePost(post.id, editContent, post.location, editMediaUrl);
+      setIsEditing(false);
+    } catch (e) {
+      console.error(e);
+      alert('更新失败');
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
+  return (
+    <motion.div 
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="bg-white rounded-[32px] shadow-sm border border-white/40 overflow-hidden mb-8"
+    >
+      {/* Header */}
+      <div className="p-6 flex items-center justify-between">
+        <div className="flex items-center gap-4">
+          <Link to={`/profile/${post.authorId}`}>
+            <img 
+              src={post.authorPhoto || 'https://api.dicebear.com/7.x/avataaars/svg?seed=' + post.authorId} 
+              alt="" 
+              className="w-12 h-12 rounded-full border-2 border-natural-bg object-cover" 
+            />
+          </Link>
+          <div>
+            <div className="flex items-center gap-2">
+              <Link to={`/profile/${post.authorId}`} className="text-sm font-bold text-natural-text hover:text-natural-primary">
+                {post.authorName}
+              </Link>
+              {isAdmin && post.authorId === user?.uid && (
+                <span className="bg-amber-100 text-amber-700 text-[8px] font-black px-1.5 py-0.5 rounded uppercase tracking-widest border border-amber-200">Admin</span>
+              )}
+              {user && user.uid !== post.authorId && (
+                <button
+                  onClick={handleToggleFollow}
+                  disabled={isFollowLoading}
+                  className={`text-[9px] font-bold px-2 py-0.5 rounded-full border transition-all ${
+                    isFollowing 
+                      ? 'border-natural-border text-natural-muted bg-white' 
+                      : 'border-natural-primary text-natural-primary hover:bg-natural-primary hover:text-white'
+                  }`}
+                >
+                  {isFollowLoading ? '...' : isFollowing ? '已关注' : '+ 关注'}
+                </button>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <p className="text-[10px] text-natural-muted font-medium uppercase tracking-wider">
+                {post.createdAt?.toDate ? formatDistanceToNow(post.createdAt.toDate(), { addSuffix: true }) : '刚刚'}
+              </p>
+              {post.location && (
+                <div className="flex items-center gap-1 text-[10px] text-natural-primary font-bold">
+                  <span className="w-0.5 h-0.5 bg-natural-muted rounded-full" />
+                  <MapPin size={10} />
+                  <span>{post.location.addressName}</span>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+        {canManage && (
+          <div className="flex items-center gap-1">
+            {isAuthor && (
+              <button 
+                onClick={() => setIsEditing(!isEditing)} 
+                className={`p-2 transition-colors ${isEditing ? 'text-natural-primary' : 'text-natural-muted hover:text-natural-primary'}`}
+              >
+                <Edit2 size={18} />
+              </button>
+            )}
+            <button 
+              onClick={() => {
+                if (window.confirm(isAdmin && !isAuthor ? '确定要以管理员身份删除此内容吗？' : '确定要删除这条动态吗？')) {
+                  forumService.deletePost(post.id);
+                }
+              }} 
+              className="p-2 text-natural-muted hover:text-red-500 transition-colors"
+            >
+              <Trash2 size={18} />
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Content */}
+      <div className="px-6 pb-6 space-y-4">
+        {isEditing ? (
+          <div className="space-y-4">
+            <textarea
+              value={editContent}
+              onChange={(e) => setEditContent(e.target.value)}
+              className="w-full bg-natural-bg rounded-2xl p-4 text-sm focus:outline-none focus:ring-2 focus:ring-natural-primary/10 resize-none h-32"
+            />
+            <div className="space-y-2">
+              <label className="text-[10px] font-bold text-natural-muted uppercase ml-2">媒体内容</label>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="px-4 py-2 bg-natural-bg hover:bg-natural-border rounded-xl text-[10px] font-bold transition-colors"
+                >
+                  更换图片
+                </button>
+                <input 
+                  type="file" 
+                  ref={fileInputRef} 
+                  onChange={handleEditFileChange}
+                  accept="image/*"
+                  className="hidden"
+                />
+                {editMediaUrl && (
+                  <button
+                    type="button"
+                    onClick={() => setEditMediaUrl('')}
+                    className="px-4 py-2 bg-red-50 text-red-500 hover:bg-red-100 rounded-xl text-[10px] font-bold transition-colors"
+                  >
+                    移除图片
+                  </button>
+                )}
+              </div>
+              <input
+                type="text"
+                value={editMediaUrl}
+                onChange={(e) => setEditMediaUrl(e.target.value)}
+                placeholder="图片链接 (URL)..."
+                className="w-full bg-natural-bg rounded-xl px-4 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-natural-primary/10"
+              />
+              {editMediaUrl && (
+                <div className="mt-2 rounded-xl overflow-hidden border border-natural-bg h-24 w-40 relative group">
+                  <img 
+                    src={editMediaUrl} 
+                    alt="Preview" 
+                    className="w-full h-full object-cover"
+                    onError={(e) => (e.currentTarget.style.display = 'none')}
+                  />
+                  <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                    <span className="text-[10px] text-white font-bold uppercase">预览</span>
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="flex justify-end gap-3">
+              <button 
+                onClick={() => {
+                  setIsEditing(false);
+                  setEditContent(post.content);
+                  setEditMediaUrl(post.mediaUrl || '');
+                }}
+                className="px-4 py-1.5 text-xs font-bold text-natural-muted hover:bg-natural-bg rounded-full transition-all"
+              >
+                取消
+              </button>
+              <button 
+                onClick={handleUpdate}
+                disabled={isUpdating || !editContent.trim()}
+                className="px-6 py-1.5 text-xs font-bold bg-natural-primary text-white rounded-full shadow-md hover:bg-natural-primary-dark transition-all disabled:opacity-50"
+              >
+                {isUpdating ? '保存中...' : '提交修改'}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <p className="text-sm text-natural-text leading-relaxed whitespace-pre-wrap">{post.content}</p>
+            {post.mediaUrl && (
+              <>
+                <div 
+                  className="rounded-[24px] overflow-hidden border border-natural-bg cursor-zoom-in hover:opacity-95 transition-opacity"
+                  onClick={() => setIsImageZoomed(true)}
+                >
+                  <img 
+                    src={post.mediaUrl} 
+                    alt="" 
+                    className="w-full max-h-[400px] object-cover"
+                    onError={(e) => (e.currentTarget.style.display = 'none')}
+                  />
+                </div>
+                <ImageZoomModal 
+                  isOpen={isImageZoomed} 
+                  onClose={() => setIsImageZoomed(false)} 
+                  src={post.mediaUrl} 
+                />
+              </>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* Actions */}
+      <div className="px-6 py-4 bg-natural-bg/30 flex items-center gap-8 border-t border-natural-bg/50">
+        <button 
+          onClick={handleLike}
+          className={`group flex items-center gap-2 transition-colors ${isLiked ? 'text-red-500' : 'text-natural-primary hover:text-red-500'}`}
+        >
+          <ThumbsUp size={20} className={isLiked ? 'fill-current' : ''} />
+          <span className="text-xs font-bold">{post.likesCount || 0}</span>
+        </button>
+        <button 
+          onClick={() => setShowComments(!showComments)}
+          className="flex items-center gap-2 text-natural-primary hover:text-brown-700 transition-colors"
+        >
+          <MessageSquare size={20} />
+          <span className="text-xs font-bold">{post.commentsCount || 0}</span>
+        </button>
+
+        <button 
+          onClick={handleShare}
+          className="flex items-center gap-2 text-natural-primary hover:text-brown-700 transition-colors relative"
+        >
+          {showShareToast ? <Check size={20} className="text-green-500" /> : <Share2 size={20} />}
+          <span className="text-xs font-bold">{showShareToast ? '已复制' : '分享'}</span>
+          
+          <AnimatePresence>
+            {showShareToast && (
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.5, y: 10 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.5, y: 10 }}
+                className="absolute -top-12 left-1/2 -translate-x-1/2 bg-natural-text text-white text-[10px] py-1.5 px-3 rounded-full whitespace-nowrap shadow-lg z-20 flex items-center gap-2 border border-white/20"
+              >
+                <Check size={12} strokeWidth={3} />
+                链接已复制
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </button>
+      </div>
+
+      {/* Comments Section */}
+      <AnimatePresence>
+        {showComments && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="overflow-hidden border-t border-natural-bg/50 bg-white"
+          >
+            <div className="p-6 space-y-6">
+              {/* Comment Form */}
+              {user && (
+                <form onSubmit={handleCommentSubmit} className="flex gap-4">
+                  <img src={user.photoURL || undefined} alt="" className="w-10 h-10 rounded-full border border-natural-bg" />
+                  <div className="flex-1 flex gap-2">
+                    <div className="flex-1 relative">
+                      <input
+                        type="text"
+                        value={commentContent}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setCommentContent(val);
+                          
+                          // Mention logic
+                          const lastAt = val.lastIndexOf('@');
+                          if (lastAt !== -1 && (lastAt === 0 || val[lastAt - 1] === ' ')) {
+                            const query = val.slice(lastAt + 1).split(' ')[0];
+                            // Filter unique commenters
+                            const uniqueCommenters = Array.from(new Set(comments.map((c: any) => c.authorName)))
+                              .map(name => comments.find((c: any) => c.authorName === name))
+                              .filter((c: any) => c && c.authorName.toLowerCase().includes(query.toLowerCase()) && c.authorId !== user.uid);
+                            
+                            setMentionSuggestions(uniqueCommenters);
+                            setShowMentions(uniqueCommenters.length > 0);
+                          } else {
+                            setShowMentions(false);
+                          }
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Escape') setShowMentions(false);
+                        }}
+                        placeholder="加入讨论..."
+                        className="w-full bg-natural-input border border-transparent rounded-2xl px-4 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-natural-primary"
+                      />
+
+                      <AnimatePresence>
+                        {showMentions && (
+                          <motion.div 
+                            initial={{ opacity: 0, y: 10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: 10 }}
+                            className="absolute bottom-full left-0 mb-2 w-48 bg-white rounded-xl shadow-xl border border-natural-border overflow-hidden z-20"
+                          >
+                            <div className="p-2 bg-natural-bg/50 border-b border-natural-border text-[9px] font-bold text-natural-muted uppercase tracking-wider">
+                              提及用户
+                            </div>
+                            {mentionSuggestions.map((c: any) => (
+                              <button
+                                key={c.authorId}
+                                type="button"
+                                onClick={() => {
+                                  const lastAt = commentContent.lastIndexOf('@');
+                                  const newVal = commentContent.slice(0, lastAt) + '@' + c.authorName + ' ';
+                                  setCommentContent(newVal);
+                                  setShowMentions(false);
+                                }}
+                                className="w-full flex items-center gap-2 p-2 hover:bg-natural-bg text-left transition-colors"
+                              >
+                                <img src={c.authorPhoto} alt="" className="w-6 h-6 rounded-full border border-white" />
+                                <span className="text-xs font-medium text-natural-text truncate">{c.authorName}</span>
+                              </button>
+                            ))}
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
+                    <button 
+                      type="submit"
+                      disabled={!commentContent.trim()}
+                      className="bg-natural-primary text-white p-2 rounded-xl disabled:opacity-30 self-center"
+                    >
+                      <Send size={18} />
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              {/* List */}
+              <div className="space-y-1">
+                {comments.length > 0 ? (
+                  comments.map(c => <CommentItem key={c.id} comment={c} postAuthorId={post.authorId} postId={post.id} />)
+                ) : (
+                  <p className="text-center text-xs text-natural-muted py-6 italic">暂无评论，分享你的见解吧</p>
+                )}
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.div>
+  );
+}
+
+// Post List Component
+export function PostList({ searchQuery }: { searchQuery: string }) {
+  const [user] = useAuthState(auth);
+  const [sortBy, setSortBy] = React.useState<'createdAt' | 'likesCount' | 'commentsCount'>('createdAt');
+
+  const postQuery = React.useMemo(() => {
+    const base = collection(db, 'posts');
+    const constraints: any[] = [orderBy(sortBy, 'desc')];
+    
+    // Add createdAt as a secondary sort to ensure consistency if counts are equal
+    if (sortBy !== 'createdAt') {
+      constraints.push(orderBy('createdAt', 'desc'));
+    }
+
+    return query(base, ...constraints);
+  }, [sortBy]);
+
+  const [snapshot, loading, error] = useCollection(postQuery);
+
+  const posts = React.useMemo(() => {
+    const allPosts = snapshot?.docs.map(doc => ({ id: doc.id, ...doc.data() })) || [];
+    if (!searchQuery.trim()) return allPosts;
+    const q = searchQuery.toLowerCase();
+    return allPosts.filter((post: any) => 
+      post.content?.toLowerCase().includes(q) || 
+      post.location?.addressName?.toLowerCase().includes(q) ||
+      post.authorName?.toLowerCase().includes(q)
+    );
+  }, [snapshot, searchQuery]);
+
+  if (loading) {
+    return (
+      <div className="flex flex-col gap-6">
+        {[1, 2, 3].map(i => (
+          <div key={i} className="bg-white rounded-2xl h-48 animate-pulse border border-gray-100" />
+        ))}
+      </div>
+    );
+  }
+
+  if (error) {
+    console.error(error);
+    return <div className="text-center py-10 text-red-500">加载失败，请刷新页面</div>;
+  }
+
+  return (
+    <div className="flex flex-col pb-20">
+      {/* Filters Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+        <h2 className="text-lg font-serif font-bold text-natural-text">社区广场</h2>
+
+        {/* Sort Toggle */}
+        <div className="flex items-center bg-white/50 backdrop-blur-sm self-start sm:self-center p-1 rounded-xl border border-natural-border shadow-sm">
+          <button
+            onClick={() => setSortBy('createdAt')}
+            className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${
+              sortBy === 'createdAt' 
+                ? 'bg-natural-primary text-white shadow-sm' 
+                : 'text-natural-muted hover:text-natural-primary'
+            }`}
+          >
+            最新
+          </button>
+          <button
+            onClick={() => setSortBy('likesCount')}
+            className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${
+              sortBy === 'likesCount' 
+                ? 'bg-natural-primary text-white shadow-sm' 
+                : 'text-natural-muted hover:text-natural-primary'
+            }`}
+          >
+            最热
+          </button>
+          <button
+            onClick={() => setSortBy('commentsCount')}
+            className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${
+              sortBy === 'commentsCount' 
+                ? 'bg-natural-primary text-white shadow-sm' 
+                : 'text-natural-muted hover:text-natural-primary'
+            }`}
+          >
+            热议
+          </button>
+        </div>
+      </div>
+
+      {posts.length > 0 ? (
+        <>
+          {posts.map((post: any) => <PostCard key={post.id} post={post} />)}
+          {!user && (
+            <div className="py-12 px-6 text-center bg-white/20 rounded-[40px] border border-white/40 mb-20">
+              <h3 className="text-xl font-serif font-bold text-natural-primary mb-2">看到这里的灵感了吗？</h3>
+              <p className="text-sm text-natural-muted mb-6">加入社区，记录你的每一个精彩瞬间。</p>
+              <button 
+                onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+                className="px-8 py-3 bg-natural-primary text-white rounded-full text-sm font-bold shadow-lg hover:shadow-natural-primary/20 transition-all"
+              >
+                立即登录参与讨论
+              </button>
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="text-center py-20 bg-white/40 rounded-[32px] border border-white/20">
+          <div className="inline-flex p-4 bg-natural-bg rounded-full text-natural-muted/30 mb-4">
+            <PlusCircle size={48} />
+          </div>
+          <p className="text-natural-muted font-serif italic">此处暂时风平浪静，等待你的位置记录...</p>
+        </div>
+      )}
+    </div>
+  );
+}

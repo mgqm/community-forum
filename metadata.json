@@ -1,0 +1,6 @@
+{
+  "name": "社区互动论坛",
+  "description": "一个支持用户分享、上传、评论和互相点赞的社区互动平台。",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
