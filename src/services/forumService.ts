@@ -1,23 +1,23 @@
-import { 
-  collection, 
-  doc, 
-  addDoc, 
-  setDoc, 
-  updateDoc, 
-  deleteDoc, 
-  getDocs, 
+// 论坛数据服务层 - 封装 Firestore 数据库操作
+// 用户认证信息通过 getCurrentUser() 获取（替代 Firebase Auth）
+import {
+  collection,
+  doc,
+  addDoc,
+  setDoc,
+  updateDoc,
+  deleteDoc,
+  getDocs,
   getDoc,
-  query, 
-  orderBy, 
-  where, 
-  serverTimestamp, 
+  query,
+  orderBy,
+  where,
+  serverTimestamp,
   increment,
   runTransaction
 } from 'firebase/firestore';
-import { 
-  updateProfile
-} from 'firebase/auth';
-import { db, auth } from '../lib/firebase';
+import { db } from '../lib/firebase';
+import { getCurrentUser } from '../context/AuthContext';
 
 export enum OperationType {
   CREATE = 'create',
@@ -44,10 +44,8 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
     authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
+      userId: getCurrentUser()?.uid,
+      email: getCurrentUser()?.email,
     },
     operationType,
     path
@@ -87,14 +85,7 @@ export const forumService = {
     try {
       await updateDoc(doc(db, 'users', uid), data);
       
-      // Also update Auth profile if it's the current user
-      const currentUser = auth.currentUser;
-      if (currentUser && currentUser.uid === uid) {
-        await updateProfile(currentUser, {
-          displayName: data.displayName || currentUser.displayName,
-          photoURL: data.photoURL || currentUser.photoURL
-        });
-      }
+      // 登录用户信息由 AuthContext 本地管理，此处同步 Firestore 即可
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, path);
     }
@@ -111,7 +102,7 @@ export const forumService = {
   },
 
   async createPost(content: string, location?: { latitude: number, longitude: number, addressName: string }, mediaUrl?: string) {
-    const user = auth.currentUser;
+    const user = getCurrentUser();
     if (!user) throw new Error('Must be logged in');
     
     const path = 'posts';
@@ -163,7 +154,7 @@ export const forumService = {
 
   // Likes
   async toggleLike(postId: string) {
-    const user = auth.currentUser;
+    const user = getCurrentUser();
     if (!user) throw new Error('Must be logged in');
     
     const likeDocPath = `posts/${postId}/likes/${user.uid}`;
@@ -218,7 +209,7 @@ export const forumService = {
 
   // Following
   async toggleFollow(targetUserId: string, isFollowing: boolean) {
-    const user = auth.currentUser;
+    const user = getCurrentUser();
     if (!user) throw new Error('Must be logged in');
     if (user.uid === targetUserId) throw new Error('Cannot follow yourself');
 
@@ -257,7 +248,7 @@ export const forumService = {
 
   // Comments
   async addComment(postId: string, content: string) {
-    const user = auth.currentUser;
+    const user = getCurrentUser();
     if (!user) throw new Error('Must be logged in');
     
     const commentPath = `posts/${postId}/comments`;
@@ -302,7 +293,7 @@ export const forumService = {
   },
 
   async toggleCommentReaction(postId: string, commentId: string, emoji: string) {
-    const user = auth.currentUser;
+    const user = getCurrentUser();
     if (!user) throw new Error('Must be logged in');
 
     const reactionDocRef = doc(db, 'posts', postId, 'comments', commentId, 'reactions', user.uid);
@@ -354,7 +345,7 @@ export const forumService = {
   },
 
   async deleteComment(postId: string, commentId: string) {
-    const user = auth.currentUser;
+    const user = getCurrentUser();
     if (!user) throw new Error('Must be logged in');
 
     const commentDocRef = doc(db, 'posts', postId, 'comments', commentId);
@@ -387,7 +378,7 @@ export const forumService = {
   },
 
   async sendMessage(receiverId: string, content: string) {
-    const user = auth.currentUser;
+    const user = getCurrentUser();
     if (!user) throw new Error('Must be logged in');
     if (user.uid === receiverId) throw new Error('Cannot message yourself');
 
@@ -445,7 +436,7 @@ export const forumService = {
   },
 
   async markAsRead(conversationId: string) {
-    const user = auth.currentUser;
+    const user = getCurrentUser();
     if (!user) return;
     
     try {

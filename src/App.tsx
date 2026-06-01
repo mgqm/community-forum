@@ -3,8 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+// 社区互动论坛 - 应用根组件
+// AuthProvider 提供全局认证状态（JWT + SQLite，替代 Firebase Auth）
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { AuthProvider } from './context/AuthContext';
 import { Navbar, CreatePost, PostList } from './components/Forum';
 import UserProfile from './components/UserProfile';
 import Messages from './components/Messages';
@@ -42,14 +45,16 @@ function Home() {
 
 export default function App() {
   return (
-    <Router>
-      <Routes>
-        <Route path="/" element={<Home />} />
-        <Route path="/profile/:userId" element={<UserProfile />} />
-        <Route path="/messages" element={<Messages />} />
-        <Route path="/messages/:conversationId" element={<Messages />} />
-      </Routes>
-      <ScrollToTop />
-    </Router>
+    <AuthProvider>
+      <Router>
+        <Routes>
+          <Route path="/" element={<Home />} />
+          <Route path="/profile/:userId" element={<UserProfile />} />
+          <Route path="/messages" element={<Messages />} />
+          <Route path="/messages/:conversationId" element={<Messages />} />
+        </Routes>
+        <ScrollToTop />
+      </Router>
+    </AuthProvider>
   );
 }

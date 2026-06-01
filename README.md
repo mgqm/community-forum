@@ -18,3 +18,5 @@ View your app in AI Studio: https://ai.studio/apps/686c5c34-1374-462f-bdc8-7acb2
 2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
 3. Run the app:
    `npm run dev`
+
+https://www.mgqm.cn/这是我使用cc+kimi2.6创建的网站，登录功能还在审核

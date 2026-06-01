@@ -1,8 +1,9 @@
+// 用户个人主页 - 展示用户信息、帖子、关注/粉丝列表
 import React from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { useAuthState } from 'react-firebase-hooks/auth';
+import { useAuth } from '../context/AuthContext';
 import { useCollection, useDocument } from 'react-firebase-hooks/firestore';
-import { db, auth } from '../lib/firebase';
+import { db } from '../lib/firebase';
 import { collection, query, where, orderBy, doc, getDoc, getDocs } from 'firebase/firestore';
 import { PostCard } from './Forum';
 import { ArrowLeft, UserPlus, Users, Grid, Settings, X, Save, Heart, MessageSquare } from 'lucide-react';
@@ -56,7 +57,7 @@ function UserListModal({ isOpen, onClose, title, userIds }: { isOpen: boolean, o
 
 function UserListItem({ userId, onSelect }: { userId: string, onSelect: () => void, key?: string }) {
   const navigate = useNavigate();
-  const [currentUser] = useAuthState(auth);
+  const { user: currentUser } = useAuth();
   const [userSnap] = useDocument(doc(db, 'users', userId));
   const userData = userSnap?.data();
 
@@ -252,7 +253,7 @@ function EditProfileModal({ isOpen, onClose, profile }: { isOpen: boolean, onClo
 export default function UserProfile() {
   const { userId } = useParams();
   const navigate = useNavigate();
-  const [currentUser] = useAuthState(auth);
+  const { user: currentUser } = useAuth();
   const [activeTab, setActiveTab] = React.useState('posts');
   const [likedPosts, setLikedPosts] = React.useState<any[]>([]);
   const [likedLoading, setLikedLoading] = React.useState(false);

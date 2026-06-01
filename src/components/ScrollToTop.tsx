@@ -1,3 +1,4 @@
+// 回到顶部悬浮按钮 - 页面滚动超过 300px 时显示
 import React from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { ArrowUp } from 'lucide-react';
@@ -5,24 +6,19 @@ import { ArrowUp } from 'lucide-react';
 export default function ScrollToTop() {
   const [isVisible, setIsVisible] = React.useState(false);
 
+  // 监听页面滚动，控制按钮显示/隐藏
   React.useEffect(() => {
     const toggleVisibility = () => {
-      if (window.pageYOffset > 300) {
-        setIsVisible(true);
-      } else {
-        setIsVisible(false);
-      }
+      setIsVisible(window.pageYOffset > 300);
     };
 
     window.addEventListener('scroll', toggleVisibility);
     return () => window.removeEventListener('scroll', toggleVisibility);
   }, []);
 
+  // 平滑滚动到页面顶部
   const scrollToTop = () => {
-    window.scrollTo({
-      top: 0,
-      behavior: 'smooth',
-    });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   return (

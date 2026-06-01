@@ -1,10 +1,10 @@
+// 社区互动论坛 - 主组件文件
+// 包含：通知中心、消息徽章、登录弹窗、导航栏、图片预览、发帖、评论、帖子卡片、帖子列表
 import React from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { LogIn, LogOut, User as UserIcon, PlusCircle, MessageSquare, ThumbsUp, Trash2, Send, Image as ImageIcon, Bell, Search, UserPlus, Edit2, Share2, Check, MapPin } from 'lucide-react';
-import { useAuthState } from 'react-firebase-hooks/auth';
 import { useCollection, useDocument } from 'react-firebase-hooks/firestore';
-import { auth, googleProvider } from '../lib/firebase';
-import { signInWithPopup, signOut, createUserWithEmailAndPassword, signInWithEmailAndPassword, updateProfile } from 'firebase/auth';
+import { useAuth } from '../context/AuthContext';
 import { forumService } from '../services/forumService';
 import { collection, query, orderBy, where, doc, deleteDoc, limit, getDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
@@ -13,7 +13,7 @@ import { Link } from 'react-router-dom';
 
 // Notification Bell Component
 export function Notifications() {
-  const [user] = useAuthState(auth);
+  const { user } = useAuth();
   const [isOpen, setIsOpen] = React.useState(false);
 
   // Listen for unread notifications
@@ -133,38 +133,17 @@ function MessageBadge({ userId }: { userId: string }) {
   );
 }
 
-// Login Modal Component
+// 登录弹窗组件 - 支持邮箱注册/登录，用户数据存储在 SQLite 数据库
 export function LoginModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) {
+  const { login, register } = useAuth();
   const [isRegisterMode, setIsRegisterMode] = React.useState(false);
   const [email, setEmail] = React.useState('');
   const [password, setPassword] = React.useState('');
   const [displayName, setDisplayName] = React.useState('');
   const [isLoading, setIsLoading] = React.useState(false);
-
-  const loginGoogle = async () => {
-    try {
-      const result = await signInWithPopup(auth, googleProvider);
-      
-      const userDocRef = doc(db, 'users', result.user.uid);
-      const userSnap = await getDoc(userDocRef);
-      
-      if (!userSnap.exists()) {
-        await forumService.createUserProfile({
-          uid: result.user.uid,
-          displayName: result.user.displayName || 'Anonymous',
-          email: result.user.email || '',
-          photoURL: result.user.photoURL || undefined
-        });
-      }
-      onClose();
-    } catch (error: any) {
-      console.error('Google login failed', error);
-      setMessage(error.message || 'Google 登录失败');
-    }
-  };
-
   const [message, setMessage] = React.useState<string | null>(null);
 
+  // 弹窗关闭时重置表单状态
   React.useEffect(() => {
     if (!isOpen) {
       setMessage(null);
@@ -175,6 +154,7 @@ export function LoginModal({ isOpen, onClose }: { isOpen: boolean, onClose: () =
     }
   }, [isOpen]);
 
+  // 邮箱登录/注册处理
   const handleEmailAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
@@ -186,58 +166,59 @@ export function LoginModal({ isOpen, onClose }: { isOpen: boolean, onClose: () =
       }
       if (isRegisterMode) {
         if (!displayName.trim()) throw new Error('请输入昵称');
-        const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-        await updateProfile(userCredential.user, { displayName });
-        await forumService.createUserProfile({
-          uid: userCredential.user.uid,
-          displayName: displayName,
-          email: userCredential.user.email!,
-          photoURL: `https://api.dicebear.com/7.x/avataaars/svg?seed=${userCredential.user.uid}`,
-          role: email === 'admin@root.com' ? 'admin' : 'user'
-        });
+        await register(email, password, displayName.trim());
       } else {
-        await signInWithEmailAndPassword(auth, email, password);
+        await login(email, password);
       }
       onClose();
     } catch (error: any) {
-      console.error('Auth error:', error);
-      let errorMsg = error.message || '认证失败，请检查输入';
-      if (error.code === 'auth/email-already-in-use') errorMsg = '该邮箱已被注册';
-      if (error.code === 'auth/invalid-email') errorMsg = '邮箱格式不正确';
-      if (error.code === 'auth/weak-password') errorMsg = '密码太弱（至少6位）';
-      if (error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password') errorMsg = '邮箱或密码错误';
-      if (error.code === 'auth/operation-not-allowed') errorMsg = '该登录方式尚未启用，请在 Firebase 控制台启用 邮箱/密码 登录。';
-      setMessage(errorMsg);
+      setMessage(error.message || '操作失败，请重试');
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleQQLogin = () => {
-    setMessage('QQ 登录需要配置 App ID。请在腾讯开放平台申请并配置环境变量。');
-  };
-
-  const handleWeChatLogin = () => {
-    setMessage('微信登录需要配置 App ID。请在微信开放平台申请并配置环境变量。');
+  // 管理员快捷登录（首次使用时自动注册管理员账号）
+  const handleAdminLogin = async () => {
+    setMessage(null);
+    setIsLoading(true);
+    try {
+      try {
+        await login('admin@root.com', 'admin123456');
+      } catch (e: any) {
+        // 如果管理员账号不存在，自动创建
+        if (e.message.includes('邮箱或密码错误')) {
+          await register('admin@root.com', 'admin123456', 'ROOT 管理员');
+        } else {
+          throw e;
+        }
+      }
+      onClose();
+    } catch (e: any) {
+      setMessage(e.message || '管理员登录失败');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
     <AnimatePresence>
       {isOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-          <motion.div 
+          <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             onClick={onClose}
             className="absolute inset-0 bg-natural-text/20 backdrop-blur-sm"
           />
-          <motion.div 
+          <motion.div
             initial={{ opacity: 0, scale: 0.9, y: 20 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.9, y: 20 }}
             className="relative w-full max-w-sm bg-white rounded-[40px] p-8 shadow-2xl border border-natural-border"
           >
+            {/* 标题区域 */}
             <div className="text-center mb-8">
               <h2 className="text-2xl font-serif font-bold text-natural-primary mb-2">
                 {isRegisterMode ? '创建账户' : '欢迎回来'}
@@ -245,8 +226,9 @@ export function LoginModal({ isOpen, onClose }: { isOpen: boolean, onClose: () =
               <p className="text-xs text-natural-muted font-medium">加入 ROOT 社区，记录精彩时刻</p>
             </div>
 
+            {/* 错误提示 */}
             {message && (
-              <motion.div 
+              <motion.div
                 initial={{ opacity: 0, height: 0 }}
                 animate={{ opacity: 1, height: 'auto' }}
                 className="mb-6 p-3 bg-red-50 text-red-600 text-[10px] rounded-xl font-bold leading-relaxed border border-red-100"
@@ -255,9 +237,10 @@ export function LoginModal({ isOpen, onClose }: { isOpen: boolean, onClose: () =
               </motion.div>
             )}
 
+            {/* 邮箱登录/注册表单 */}
             <form onSubmit={handleEmailAuth} className="space-y-4 mb-6">
               {isRegisterMode && (
-                <input 
+                <input
                   type="text"
                   placeholder="昵称"
                   value={displayName}
@@ -266,7 +249,7 @@ export function LoginModal({ isOpen, onClose }: { isOpen: boolean, onClose: () =
                   required
                 />
               )}
-              <input 
+              <input
                 type="email"
                 placeholder="邮箱"
                 value={email}
@@ -274,7 +257,7 @@ export function LoginModal({ isOpen, onClose }: { isOpen: boolean, onClose: () =
                 className="w-full bg-natural-bg rounded-2xl px-5 py-3 text-xs border border-transparent focus:border-natural-primary/20 outline-none"
                 required
               />
-              <input 
+              <input
                 type="password"
                 placeholder="密码"
                 value={password}
@@ -282,111 +265,46 @@ export function LoginModal({ isOpen, onClose }: { isOpen: boolean, onClose: () =
                 className="w-full bg-natural-bg rounded-2xl px-5 py-3 text-xs border border-transparent focus:border-natural-primary/20 outline-none"
                 required
               />
-              <button 
+              <button
                 type="submit"
                 disabled={isLoading}
                 className="w-full py-3 bg-natural-primary text-white rounded-2xl text-xs font-bold shadow-lg shadow-natural-primary/20 hover:opacity-90 disabled:opacity-50 transition-all"
               >
-                {isLoading ? '加载中...' : (isRegisterMode ? '立即注册' : '登录')}
+                {isLoading ? '处理中...' : (isRegisterMode ? '立即注册' : '登录')}
               </button>
             </form>
 
+            {/* 分隔线 */}
             <div className="relative flex items-center justify-center mb-6">
               <div className="absolute inset-0 flex items-center">
                 <div className="w-full border-t border-natural-border"></div>
               </div>
               <span className="relative px-4 text-[10px] font-bold text-natural-muted bg-white uppercase tracking-widest">
-                或者
+                快捷操作
               </span>
             </div>
 
-            <div className="space-y-3">
-              <button 
-                onClick={loginGoogle}
+            {/* 管理员快捷登录按钮 */}
+            {!isRegisterMode && (
+              <button
+                onClick={handleAdminLogin}
                 type="button"
-                className="w-full flex items-center justify-center gap-3 px-6 py-3 bg-white border border-natural-border rounded-2xl text-[11px] font-bold hover:bg-natural-bg transition-all"
+                disabled={isLoading}
+                className="w-full flex items-center justify-center gap-3 px-6 py-3 bg-amber-50 text-amber-700 border border-amber-200 rounded-2xl text-[10px] font-bold hover:bg-amber-100 transition-all uppercase tracking-widest disabled:opacity-50"
               >
-                <img src="https://www.google.com/favicon.ico" className="w-4 h-4" alt="" />
-                <span>Google 账号快捷登录</span>
+                <span>{isLoading ? '连接中...' : '管理员快捷登录'}</span>
               </button>
+            )}
 
-              {!isRegisterMode && (
-                <button 
-                  onClick={async () => {
-                    setMessage(null);
-                    setIsLoading(true);
-                    try {
-                      const adminEmail = 'admin@root.com';
-                      const adminPass = 'admin123456';
-                      try {
-                        await signInWithEmailAndPassword(auth, adminEmail, adminPass);
-                      } catch (e: any) {
-                        if (e.code === 'auth/user-not-found' || e.code === 'auth/invalid-credential' || e.code === 'auth/invalid-login-credentials') {
-                          // Try registering if it doesn't exist or credentials fail (in case it was partially created)
-                          try {
-                            const userCredential = await createUserWithEmailAndPassword(auth, adminEmail, adminPass);
-                            await updateProfile(userCredential.user, { displayName: 'ROOT 管理员' });
-                            await forumService.createUserProfile({
-                              uid: userCredential.user.uid,
-                              displayName: 'ROOT 管理员',
-                              email: adminEmail,
-                              photoURL: 'https://api.dicebear.com/7.x/bottts-neutral/svg?seed=admin',
-                              role: 'admin'
-                            });
-                          } catch (regErr: any) {
-                            // If user actually exists but password was wrong, regErr will be email-already-in-use
-                            if (regErr.code === 'auth/email-already-in-use') {
-                              throw new Error('管理员账户已存在但密码错误。');
-                            }
-                            throw regErr;
-                          }
-                        } else {
-                          throw e;
-                        }
-                      }
-                      onClose();
-                    } catch (e: any) {
-                      setMessage(e.message);
-                    } finally {
-                      setIsLoading(false);
-                    }
-                  }}
-                  type="button"
-                  disabled={isLoading}
-                  className="w-full flex items-center justify-center gap-3 px-6 py-2 bg-amber-50 text-amber-700 border border-amber-200 rounded-2xl text-[10px] font-bold hover:bg-amber-100 transition-all uppercase tracking-widest disabled:opacity-50"
-                >
-                  <span>{isLoading ? '连接中...' : '管理员快捷测试登录'}</span>
-                </button>
-              )}
-
-              <div className="grid grid-cols-2 gap-3">
-                <button 
-                  onClick={handleWeChatLogin}
-                  type="button"
-                  className="flex items-center justify-center gap-2 px-4 py-3 bg-[#07C160]/10 text-[#07C160] rounded-2xl text-[11px] font-bold hover:bg-[#07C160]/20 transition-all"
-                >
-                  <MessageSquare size={14} />
-                  <span>微信</span>
-                </button>
-                <button 
-                  onClick={handleQQLogin}
-                  type="button"
-                  className="flex items-center justify-center gap-2 px-4 py-3 bg-[#12B7F5]/10 text-[#12B7F5] rounded-2xl text-[11px] font-bold hover:bg-[#12B7F5]/20 transition-all"
-                >
-                  <PlusCircle size={14} className="rotate-45" />
-                  <span>QQ</span>
-                </button>
-              </div>
-            </div>
-
+            {/* 注册/登录模式切换 */}
             <div className="mt-8 text-center space-y-2">
-              <button 
+              <button
                 onClick={() => setIsRegisterMode(!isRegisterMode)}
                 className="text-[11px] text-natural-primary font-bold hover:underline"
               >
                 {isRegisterMode ? '已有账号？立即登录' : '没有账号？创建免费账户'}
               </button>
-              <button 
+              <button
                 onClick={onClose}
                 className="block w-full text-[10px] text-natural-muted hover:text-natural-primary transition-colors font-medium uppercase tracking-widest"
               >
@@ -402,7 +320,7 @@ export function LoginModal({ isOpen, onClose }: { isOpen: boolean, onClose: () =
 
 // Navbar Component
 export function Navbar({ searchQuery, setSearchQuery }: { searchQuery: string, setSearchQuery: (q: string) => void }) {
-  const [user] = useAuthState(auth);
+  const { user, logout } = useAuth();
   const [isLoginOpen, setIsLoginOpen] = React.useState(false);
   const [localQuery, setLocalQuery] = React.useState(searchQuery);
 
@@ -457,7 +375,7 @@ export function Navbar({ searchQuery, setSearchQuery }: { searchQuery: string, s
                   <img src={user.photoURL || undefined} alt="" className="w-10 h-10 rounded-full border-2 border-white shadow-sm" />
                 </Link>
                 <button 
-                  onClick={() => signOut(auth)}
+                  onClick={() => logout()}
                   className="flex items-center gap-2 text-sm font-medium text-natural-muted hover:text-red-700 transition-colors"
                 >
                   <LogOut size={18} />
@@ -520,7 +438,7 @@ export function ImageZoomModal({ isOpen, onClose, src }: { isOpen: boolean, onCl
 
 // CreatePost Component
 export function CreatePost() {
-  const [user] = useAuthState(auth);
+  const { user } = useAuth();
   const [content, setContent] = React.useState('');
   const [location, setLocation] = React.useState<{ latitude: number, longitude: number, addressName: string } | null>(null);
   const [isLocating, setIsLocating] = React.useState(false);
@@ -714,7 +632,7 @@ export function CreatePost() {
 
 // Comment Item
 export function CommentItem({ comment, postAuthorId, postId }: { comment: any, postAuthorId: string, postId: string, key?: string }) {
-  const [user] = useAuthState(auth);
+  const { user } = useAuth();
   const [showEmojiPicker, setShowEmojiPicker] = React.useState(false);
   const [isDeleting, setIsDeleting] = React.useState(false);
   
@@ -855,7 +773,7 @@ export function CommentItem({ comment, postAuthorId, postId }: { comment: any, p
 
 // Post Card Component
 export function PostCard({ post }: { post: any, key?: string }) {
-  const [user] = useAuthState(auth);
+  const { user } = useAuth();
   const [showComments, setShowComments] = React.useState(false);
   const [commentContent, setCommentContent] = React.useState('');
   const [mentionSuggestions, setMentionSuggestions] = React.useState<any[]>([]);
@@ -1330,7 +1248,7 @@ export function PostCard({ post }: { post: any, key?: string }) {
 
 // Post List Component
 export function PostList({ searchQuery }: { searchQuery: string }) {
-  const [user] = useAuthState(auth);
+  const { user } = useAuth();
   const [sortBy, setSortBy] = React.useState<'createdAt' | 'likesCount' | 'commentsCount'>('createdAt');
 
   const postQuery = React.useMemo(() => {

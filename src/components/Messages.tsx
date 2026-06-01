@@ -1,8 +1,10 @@
+// 私信系统 - 会话列表 + 聊天窗口
+// 数据存储在 Firestore 的 conversations 集合中
 import React from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { useAuthState } from 'react-firebase-hooks/auth';
+import { useAuth } from '../context/AuthContext';
 import { useCollection, useDocument } from 'react-firebase-hooks/firestore';
-import { db, auth } from '../lib/firebase';
+import { db } from '../lib/firebase';
 import { collection, query, where, orderBy, doc, limit } from 'firebase/firestore';
 import { forumService } from '../services/forumService';
 import { ArrowLeft, Send, MoreVertical, CheckCircle2 } from 'lucide-react';
@@ -12,7 +14,7 @@ import { zhCN } from 'date-fns/locale';
 
 export default function Messages() {
   const { conversationId } = useParams();
-  const [user] = useAuthState(auth);
+  const { user } = useAuth();
   const navigate = useNavigate();
 
   // Redirect if not logged in
