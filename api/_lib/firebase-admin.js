@@ -17,7 +17,6 @@ function getAdminApp() {
     const serviceAccount = JSON.parse(saJson);
     adminApp = admin.initializeApp({
       credential: admin.credential.cert(serviceAccount),
-      databaseId: 'ai-studio-686c5c34-1374-462f-bdc8-7acb2e72f682',
     });
     return adminApp;
   } catch (e) {
@@ -26,7 +25,7 @@ function getAdminApp() {
 }
 
 export function getDb() {
-  return getAdminApp().firestore();
+  return getAdminApp().firestore('ai-studio-686c5c34-1374-462f-bdc8-7acb2e72f682');
 }
 
 export function getAuth() {
