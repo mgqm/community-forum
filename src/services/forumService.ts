@@ -101,25 +101,46 @@ export const forumService = {
     }
   },
 
-  async createPost(content: string, location?: { latitude: number, longitude: number, addressName: string }, mediaUrl?: string) {
+  async createPost(
+    content: string,
+    location?: { latitude: number, longitude: number, addressName: string },
+    mediaUrl?: string,
+    tags?: string[],
+    moderationStatus?: string,
+    moderationScore?: number
+  ) {
     const user = getCurrentUser();
     if (!user) throw new Error('Must be logged in');
-    
+
     const path = 'posts';
     try {
-      await addDoc(collection(db, 'posts'), {
+      const docRef = await addDoc(collection(db, 'posts'), {
         authorId: user.uid,
         authorName: user.displayName || 'Anonymous',
         authorPhoto: user.photoURL || '',
         content,
         location: location || null,
         mediaUrl: mediaUrl || null,
+        tags: tags || [],
+        embedding: null,
+        moderationStatus: moderationStatus || 'clean',
+        moderationScore: moderationScore || 0,
         likesCount: 0,
         commentsCount: 0,
         createdAt: serverTimestamp()
       });
+      return docRef.id;
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, path);
+    }
+  },
+
+  async updatePostEmbedding(postId: string, embedding: number[]) {
+    const path = `posts/${postId}`;
+    try {
+      await updateDoc(doc(db, 'posts', postId), { embedding });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, path);
     }
   },
 

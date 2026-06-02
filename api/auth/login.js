@@ -57,6 +57,6 @@ export default async function handler(req, res) {
     });
   } catch (err) {
     console.error('登录失败:', err);
-    return res.status(500).json({ error: '服务器内部错误，登录失败' });
+    return res.status(500).json({ error: '服务器内部错误: ' + (err.message || '登录失败') });
   }
 }

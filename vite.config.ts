@@ -15,6 +15,10 @@ export default defineConfig(({mode}) => {
         '@': path.resolve(__dirname, '.'),
       },
     },
+    // ML 模型文件需要排除预构建
+    optimizeDeps: {
+      exclude: ['@huggingface/transformers'],
+    },
     server: {
       // HMR 热更新配置
       hmr: process.env.DISABLE_HMR !== 'true',
@@ -26,6 +30,14 @@ export default defineConfig(({mode}) => {
           changeOrigin: true,
         },
       },
+      // 跨域隔离头：ONNX Runtime 多线程需要 SharedArrayBuffer
+      headers: {
+        'Cross-Origin-Opener-Policy': 'same-origin',
+        'Cross-Origin-Embedder-Policy': 'credentialless',
+      },
+    },
+    build: {
+      target: 'esnext',
     },
   };
 });

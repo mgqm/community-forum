@@ -2,7 +2,7 @@
 // 包含：通知中心、消息徽章、登录弹窗、导航栏、图片预览、发帖、评论、帖子卡片、帖子列表
 import React from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { LogIn, LogOut, User as UserIcon, PlusCircle, MessageSquare, ThumbsUp, Trash2, Send, Image as ImageIcon, Bell, Search, UserPlus, Edit2, Share2, Check, MapPin } from 'lucide-react';
+import { LogIn, LogOut, User as UserIcon, PlusCircle, MessageSquare, ThumbsUp, Trash2, Send, Image as ImageIcon, Bell, Search, UserPlus, Edit2, Share2, Check, MapPin, ShieldAlert } from 'lucide-react';
 import { useCollection, useDocument } from 'react-firebase-hooks/firestore';
 import { useAuth } from '../context/AuthContext';
 import { forumService } from '../services/forumService';
@@ -10,6 +10,10 @@ import { collection, query, orderBy, where, doc, deleteDoc, limit, getDoc } from
 import { db } from '../lib/firebase';
 import { formatDistanceToNow } from 'date-fns';
 import { Link } from 'react-router-dom';
+import { checkContent } from '../services/ml/contentModeration';
+import ModerationWarning from './ml/ModerationWarning';
+import { smartCategorize } from '../services/ml/smartCategorization';
+import CategoryBadge from './ml/CategoryBadge';
 
 // Notification Bell Component
 export function Notifications() {
@@ -319,7 +323,17 @@ export function LoginModal({ isOpen, onClose }: { isOpen: boolean, onClose: () =
 }
 
 // Navbar Component
-export function Navbar({ searchQuery, setSearchQuery }: { searchQuery: string, setSearchQuery: (q: string) => void }) {
+export function Navbar({
+  searchQuery,
+  setSearchQuery,
+  searchMode,
+  setSearchMode,
+}: {
+  searchQuery: string;
+  setSearchQuery: (q: string) => void;
+  searchMode: 'keyword' | 'semantic';
+  setSearchMode: (mode: 'keyword' | 'semantic') => void;
+}) {
   const { user, logout } = useAuth();
   const [isLoginOpen, setIsLoginOpen] = React.useState(false);
   const [localQuery, setLocalQuery] = React.useState(searchQuery);
@@ -345,16 +359,29 @@ export function Navbar({ searchQuery, setSearchQuery }: { searchQuery: string, s
             <Link to="/" className="text-2xl font-serif font-bold text-natural-primary tracking-tight shrink-0 hidden sm:block">
               ROOTS
             </Link>
-            
-            <div className="relative flex-1 max-w-md">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-natural-muted w-4 h-4" />
-              <input 
-                type="text" 
-                value={localQuery}
-                onChange={(e) => setLocalQuery(e.target.value)}
-                placeholder="搜索动态或分类..." 
-                className="w-full bg-natural-input/80 rounded-full py-1.5 pl-10 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-natural-primary/20 transition-all font-medium"
-              />
+
+            <div className="relative flex-1 max-w-md flex items-center gap-1">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-natural-muted w-4 h-4" />
+                <input
+                  type="text"
+                  value={localQuery}
+                  onChange={(e) => setLocalQuery(e.target.value)}
+                  placeholder={searchMode === 'semantic' ? '语义搜索...' : '搜索动态或分类...'}
+                  className="w-full bg-natural-input/80 rounded-full py-1.5 pl-10 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-natural-primary/20 transition-all font-medium"
+                />
+              </div>
+              <button
+                onClick={() => setSearchMode(searchMode === 'keyword' ? 'semantic' : 'keyword')}
+                className={`flex-shrink-0 text-[10px] font-bold px-2 py-1.5 rounded-full transition-all ${
+                  searchMode === 'semantic'
+                    ? 'bg-natural-primary text-white'
+                    : 'bg-white border border-natural-border text-natural-muted hover:border-natural-primary'
+                }`}
+                title={searchMode === 'keyword' ? '切换到语义搜索' : '切换到关键词搜索'}
+              >
+                {searchMode === 'keyword' ? '关键词' : '语义'}
+              </button>
             </div>
           </div>
 
@@ -447,6 +474,15 @@ export function CreatePost() {
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
+  // 内容审核状态
+  const [isModerating, setIsModerating] = React.useState(false);
+  const [moderationResult, setModerationResult] = React.useState<any>(null);
+  const [showModerationWarning, setShowModerationWarning] = React.useState(false);
+  const [pendingPublish, setPendingPublish] = React.useState(false);
+
+  // 智能分类状态
+  const [assignedTags, setAssignedTags] = React.useState<string[]>([]);
+
   const fetchLocation = () => {
     if (!navigator.geolocation) {
       alert('您的浏览器不支持地理位置服务');
@@ -458,8 +494,6 @@ export function CreatePost() {
       async (position) => {
         const { latitude, longitude } = position.coords;
         try {
-          // In a real app, you would use reverse geocoding here.
-          // For now, we'll just use a placeholder address or coordinates.
           setLocation({
             latitude,
             longitude,
@@ -488,7 +522,7 @@ export function CreatePost() {
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      if (file.size > 2 * 1024 * 1024) { // 2MB limit for base64
+      if (file.size > 2 * 1024 * 1024) {
         alert('图片过大，请选择 2MB 以下的图片');
         return;
       }
@@ -501,132 +535,229 @@ export function CreatePost() {
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!content.trim() || isSubmitting) return;
-
+  // 执行发布（审核通过后调用）
+  const doPublish = async (forcePublish = false, moderationStatus = 'clean', moderationScore = 0) => {
     setIsSubmitting(true);
     try {
-      await forumService.createPost(content, location || undefined, mediaUrl);
+      const postId = await forumService.createPost(
+        content,
+        location || undefined,
+        mediaUrl || undefined,
+        assignedTags.length > 0 ? assignedTags : undefined,
+        moderationStatus,
+        moderationScore
+      );
       setContent('');
       setMediaUrl('');
       setLocation(null);
       setShowMediaInput(false);
+      setAssignedTags([]);
+      setModerationResult(null);
+
+      // 异步生成嵌入向量（不阻塞发布流程）
+      if (postId) {
+        import('../services/ml/semanticSearch').then(({ generateDocumentEmbedding }) => {
+          generateDocumentEmbedding(content).then(embedding => {
+            if (embedding) {
+              forumService.updatePostEmbedding(postId, embedding);
+            }
+          }).catch(() => {});
+        }).catch(() => {});
+      }
     } catch (error) {
       alert('发布失败，请重试');
     } finally {
       setIsSubmitting(false);
+      setPendingPublish(false);
     }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!content.trim() || isSubmitting) return;
+
+    // 执行内容审核
+    setIsModerating(true);
+    try {
+      const result = await checkContent(content);
+      setModerationResult(result);
+
+      if (!result.isClean) {
+        // 内容有问题，显示警告弹窗
+        setPendingPublish(true);
+        setShowModerationWarning(true);
+        setIsModerating(false);
+        return;
+      }
+    } catch (err) {
+      // 审核失败，允许发布但标记为未审核
+      console.warn('内容审核失败，允许发布:', err);
+    }
+    setIsModerating(false);
+
+    // 内容审核通过，尝试分类
+    try {
+      const catResult = await smartCategorize(content);
+      if (catResult.tags.length > 0) {
+        setAssignedTags(catResult.tags);
+      }
+    } catch (err) {
+      // 分类失败不影响发布
+    }
+
+    await doPublish(false, 'clean', moderationResult?.score || 0);
+  };
+
+  // 用户坚持发布（忽略审核警告）
+  const handleProceedAnyway = async () => {
+    setShowModerationWarning(false);
+    // 尝试分类
+    try {
+      const catResult = await smartCategorize(content);
+      if (catResult.tags.length > 0) {
+        setAssignedTags(catResult.tags);
+      }
+    } catch (err) {}
+    await doPublish(true, 'flagged', moderationResult?.score || 0);
   };
 
   if (!user) return null;
 
   return (
-    <motion.div 
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="bg-white rounded-[32px] p-6 shadow-sm border border-white/40 mb-8"
-    >
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div className="flex gap-4">
-          <img src={user.photoURL || undefined} alt="" className="w-12 h-12 rounded-full border-2 border-natural-bg" />
-          <div className="flex-1 space-y-3">
-            <textarea
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
-              placeholder="分享你的想法..."
-              className="w-full bg-natural-input rounded-2xl p-4 text-sm focus:outline-none focus:ring-2 focus:ring-natural-primary/10 resize-none h-28"
-            />
-            {location && (
-              <div className="flex items-center gap-2 px-3 py-1 bg-natural-primary/5 rounded-full w-fit">
-                <MapPin size={12} className="text-natural-primary" />
-                <span className="text-[10px] font-bold text-natural-primary">{location.addressName}</span>
-                <button 
-                  type="button" 
-                  onClick={() => setLocation(null)}
-                  className="text-natural-muted hover:text-red-500 transition-colors"
-                >
-                  <PlusCircle size={12} className="rotate-45" />
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-        
-        <AnimatePresence>
-          {showMediaInput && (
-            <motion.div 
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: 'auto', opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              className="overflow-hidden space-y-3"
-            >
-              <div className="relative inline-block w-40 h-40 rounded-2xl overflow-hidden border border-natural-border group">
-                {mediaUrl && <img src={mediaUrl} alt="Preview" className="w-full h-full object-cover" />}
-                <button 
-                  type="button"
-                  onClick={() => setMediaUrl('')}
-                  className="absolute top-2 right-2 p-1.5 bg-black/50 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
-                >
-                  <Trash2 size={14} />
-                </button>
-              </div>
-              <input
-                type="text"
-                value={mediaUrl}
-                onChange={(e) => setMediaUrl(e.target.value)}
-                placeholder="或者输入图片链接 (URL)..."
-                className="w-full bg-natural-input rounded-xl px-4 py-2 text-[10px] border border-transparent focus:border-natural-border focus:outline-none"
+    <>
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="bg-white rounded-[32px] p-6 shadow-sm border border-white/40 mb-8"
+      >
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="flex gap-4">
+            <img src={user.photoURL || undefined} alt="" className="w-12 h-12 rounded-full border-2 border-natural-bg" />
+            <div className="flex-1 space-y-3">
+              <textarea
+                value={content}
+                onChange={(e) => { setContent(e.target.value); setAssignedTags([]); }}
+                placeholder="分享你的想法..."
+                className="w-full bg-natural-input rounded-2xl p-4 text-sm focus:outline-none focus:ring-2 focus:ring-natural-primary/10 resize-none h-28"
               />
-            </motion.div>
-          )}
-        </AnimatePresence>
+              {location && (
+                <div className="flex items-center gap-2 px-3 py-1 bg-natural-primary/5 rounded-full w-fit">
+                  <MapPin size={12} className="text-natural-primary" />
+                  <span className="text-[10px] font-bold text-natural-primary">{location.addressName}</span>
+                  <button
+                    type="button"
+                    onClick={() => setLocation(null)}
+                    className="text-natural-muted hover:text-red-500 transition-colors"
+                  >
+                    <PlusCircle size={12} className="rotate-45" />
+                  </button>
+                </div>
+              )}
+              {/* 自动分类标签预览 */}
+              {assignedTags.length > 0 && (
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-[10px] text-muted-text">自动标记：</span>
+                  {assignedTags.map(tag => (
+                    <React.Fragment key={tag}><CategoryBadge label={tag} /></React.Fragment>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
 
-        <div className="flex justify-between items-center pt-2 border-t border-natural-bg">
-          <div className="flex items-center gap-2">
+          <AnimatePresence>
+            {showMediaInput && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: 'auto', opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                className="overflow-hidden space-y-3"
+              >
+                <div className="relative inline-block w-40 h-40 rounded-2xl overflow-hidden border border-natural-border group">
+                  {mediaUrl && <img src={mediaUrl} alt="Preview" className="w-full h-full object-cover" />}
+                  <button
+                    type="button"
+                    onClick={() => setMediaUrl('')}
+                    className="absolute top-2 right-2 p-1.5 bg-black/50 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+                <input
+                  type="text"
+                  value={mediaUrl}
+                  onChange={(e) => setMediaUrl(e.target.value)}
+                  placeholder="或者输入图片链接 (URL)..."
+                  className="w-full bg-natural-input rounded-xl px-4 py-2 text-[10px] border border-transparent focus:border-natural-border focus:outline-none"
+                />
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          <div className="flex justify-between items-center pt-2 border-t border-natural-bg">
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className={`flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-full transition-colors ${mediaUrl ? 'bg-natural-primary text-white' : 'text-natural-muted hover:bg-natural-bg'}`}
+              >
+                <ImageIcon size={18} />
+                <span className="hidden sm:inline">图片</span>
+              </button>
+              <input
+                type="file"
+                ref={fileInputRef}
+                onChange={handleFileChange}
+                accept="image/*"
+                className="hidden"
+              />
+
+              <button
+                type="button"
+                onClick={fetchLocation}
+                disabled={isLocating}
+                className={`flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-full transition-colors ${location ? 'bg-natural-primary text-white' : 'text-natural-muted hover:bg-natural-bg'}`}
+              >
+                <MapPin size={18} />
+                <span className="hidden sm:inline">{isLocating ? '获取中...' : '定位'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowMediaInput(!showMediaInput)}
+                className="text-xs text-natural-muted hover:text-natural-primary px-2"
+              >
+                {showMediaInput ? '收起' : 'URL'}
+              </button>
+              {/* 审核状态指示 */}
+              {isModerating && (
+                <span className="text-[10px] text-amber-600 flex items-center gap-1">
+                  <ShieldAlert size={12} />
+                  检查中...
+                </span>
+              )}
+            </div>
             <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              className={`flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-full transition-colors ${mediaUrl ? 'bg-natural-primary text-white' : 'text-natural-muted hover:bg-natural-bg'}`}
+              type="submit"
+              disabled={!content.trim() || isSubmitting || isModerating}
+              className="bg-natural-primary text-white px-8 py-2 rounded-full text-sm font-medium hover:bg-natural-primary-dark disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-md shadow-natural-primary/20"
             >
-              <ImageIcon size={18} />
-              <span className="hidden sm:inline">图片</span>
-            </button>
-            <input 
-              type="file" 
-              ref={fileInputRef} 
-              onChange={handleFileChange} 
-              accept="image/*" 
-              className="hidden" 
-            />
-            
-            <button
-              type="button"
-              onClick={fetchLocation}
-              disabled={isLocating}
-              className={`flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-full transition-colors ${location ? 'bg-natural-primary text-white' : 'text-natural-muted hover:bg-natural-bg'}`}
-            >
-              <MapPin size={18} />
-              <span className="hidden sm:inline">{isLocating ? '获取中...' : '定位'}</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowMediaInput(!showMediaInput)}
-              className="text-xs text-natural-muted hover:text-natural-primary px-2"
-            >
-              {showMediaInput ? '收起' : 'URL'}
+              {isModerating ? '检查中...' : isSubmitting ? '发布中...' : '发布'}
             </button>
           </div>
-          <button
-            type="submit"
-            disabled={!content.trim() || isSubmitting}
-            className="bg-natural-primary text-white px-8 py-2 rounded-full text-sm font-medium hover:bg-natural-primary-dark disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-md shadow-natural-primary/20"
-          >
-            {isSubmitting ? '发布中...' : '发布'}
-          </button>
-        </div>
-      </form>
-    </motion.div>
+        </form>
+      </motion.div>
+
+      {/* 内容审核警告弹窗 */}
+      <ModerationWarning
+        isOpen={showModerationWarning}
+        result={moderationResult}
+        onGoBack={() => {
+          setShowModerationWarning(false);
+          setPendingPublish(false);
+        }}
+        onProceedAnyway={handleProceedAnyway}
+      />
+    </>
   );
 }
 
@@ -999,6 +1130,15 @@ export function PostCard({ post }: { post: any, key?: string }) {
         )}
       </div>
 
+      {/* Tags */}
+      {post.tags && post.tags.length > 0 && (
+        <div className="px-6 pb-3 flex items-center gap-1.5 flex-wrap">
+          {post.tags.map((tag: string) => (
+            <React.Fragment key={tag}><CategoryBadge label={tag} /></React.Fragment>
+          ))}
+        </div>
+      )}
+
       {/* Content */}
       <div className="px-6 pb-6 space-y-4">
         {isEditing ? (
@@ -1247,14 +1387,17 @@ export function PostCard({ post }: { post: any, key?: string }) {
 }
 
 // Post List Component
-export function PostList({ searchQuery }: { searchQuery: string }) {
+export function PostList({ searchQuery, searchMode }: { searchQuery: string; searchMode: 'keyword' | 'semantic' }) {
   const { user } = useAuth();
   const [sortBy, setSortBy] = React.useState<'createdAt' | 'likesCount' | 'commentsCount'>('createdAt');
+  const [selectedTag, setSelectedTag] = React.useState<string | null>(null);
+  const [semanticResults, setSemanticResults] = React.useState<any[] | null>(null);
+  const [isSemanticSearching, setIsSemanticSearching] = React.useState(false);
 
   const postQuery = React.useMemo(() => {
     const base = collection(db, 'posts');
     const constraints: any[] = [orderBy(sortBy, 'desc')];
-    
+
     // Add createdAt as a secondary sort to ensure consistency if counts are equal
     if (sortBy !== 'createdAt') {
       constraints.push(orderBy('createdAt', 'desc'));
@@ -1265,16 +1408,69 @@ export function PostList({ searchQuery }: { searchQuery: string }) {
 
   const [snapshot, loading, error] = useCollection(postQuery);
 
-  const posts = React.useMemo(() => {
+  // 提取所有不重复的标签
+  const allTags = React.useMemo(() => {
     const allPosts = snapshot?.docs.map(doc => ({ id: doc.id, ...doc.data() })) || [];
-    if (!searchQuery.trim()) return allPosts;
-    const q = searchQuery.toLowerCase();
-    return allPosts.filter((post: any) => 
-      post.content?.toLowerCase().includes(q) || 
-      post.location?.addressName?.toLowerCase().includes(q) ||
-      post.authorName?.toLowerCase().includes(q)
-    );
-  }, [snapshot, searchQuery]);
+    const tagSet = new Set<string>();
+    allPosts.forEach((post: any) => {
+      if (post.tags) {
+        post.tags.forEach((tag: string) => tagSet.add(tag));
+      }
+    });
+    return Array.from(tagSet);
+  }, [snapshot]);
+
+  const posts = React.useMemo(() => {
+    let allPosts = snapshot?.docs.map(doc => ({ id: doc.id, ...doc.data() })) || [];
+
+    // 标签筛选
+    if (selectedTag) {
+      allPosts = allPosts.filter((post: any) => post.tags?.includes(selectedTag));
+    }
+
+    // 语义搜索模式：使用预计算的语义排序结果
+    if (searchMode === 'semantic' && semanticResults && searchQuery.trim()) {
+      const filtered = semanticResults.filter((r: any) =>
+        selectedTag ? r.post.tags?.includes(selectedTag) : true
+      );
+      return filtered.map((r: any) => ({ ...r.post, _similarity: r.similarity }));
+    }
+
+    // 关键词搜索
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      allPosts = allPosts.filter((post: any) =>
+        post.content?.toLowerCase().includes(q) ||
+        post.location?.addressName?.toLowerCase().includes(q) ||
+        post.authorName?.toLowerCase().includes(q)
+      );
+    }
+
+    return allPosts;
+  }, [snapshot, searchQuery, selectedTag, searchMode, semanticResults]);
+
+  // 语义搜索异步执行
+  React.useEffect(() => {
+    if (searchMode !== 'semantic' || !searchQuery.trim()) {
+      setSemanticResults(null);
+      return;
+    }
+
+    setIsSemanticSearching(true);
+    const allPosts = snapshot?.docs.map(doc => ({ id: doc.id, ...doc.data() })) || [];
+
+    // 动态导入语义搜索模块
+    import('../services/ml/semanticSearch').then(({ semanticSearchPosts }) => {
+      semanticSearchPosts(searchQuery, allPosts).then(results => {
+        setSemanticResults(results);
+        setIsSemanticSearching(false);
+      }).catch(() => {
+        setIsSemanticSearching(false);
+      });
+    }).catch(() => {
+      setIsSemanticSearching(false);
+    });
+  }, [searchMode, searchQuery, snapshot]);
 
   if (loading) {
     return (
@@ -1302,8 +1498,8 @@ export function PostList({ searchQuery }: { searchQuery: string }) {
           <button
             onClick={() => setSortBy('createdAt')}
             className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${
-              sortBy === 'createdAt' 
-                ? 'bg-natural-primary text-white shadow-sm' 
+              sortBy === 'createdAt'
+                ? 'bg-natural-primary text-white shadow-sm'
                 : 'text-natural-muted hover:text-natural-primary'
             }`}
           >
@@ -1312,8 +1508,8 @@ export function PostList({ searchQuery }: { searchQuery: string }) {
           <button
             onClick={() => setSortBy('likesCount')}
             className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${
-              sortBy === 'likesCount' 
-                ? 'bg-natural-primary text-white shadow-sm' 
+              sortBy === 'likesCount'
+                ? 'bg-natural-primary text-white shadow-sm'
                 : 'text-natural-muted hover:text-natural-primary'
             }`}
           >
@@ -1331,6 +1527,46 @@ export function PostList({ searchQuery }: { searchQuery: string }) {
           </button>
         </div>
       </div>
+
+      {/* Tag Filter Bar */}
+      {allTags.length > 0 && (
+        <div className="flex items-center gap-1.5 mb-4 overflow-x-auto pb-1 scrollbar-hide">
+          <button
+            onClick={() => setSelectedTag(null)}
+            className={`flex-shrink-0 text-[10px] font-bold px-3 py-1 rounded-full transition-all ${
+              !selectedTag
+                ? 'bg-natural-primary text-white'
+                : 'bg-white border border-natural-border text-natural-muted hover:border-natural-primary'
+            }`}
+          >
+            全部
+          </button>
+          {allTags.map(tag => (
+            <React.Fragment key={tag}>
+              <CategoryBadge
+                label={tag}
+                active={selectedTag === tag}
+                onClick={() => setSelectedTag(selectedTag === tag ? null : tag)}
+                size="md"
+              />
+            </React.Fragment>
+          ))}
+        </div>
+      )}
+
+      {/* 语义搜索状态提示 */}
+      {searchMode === 'semantic' && searchQuery.trim() && (
+        <div className="mb-4 text-xs text-natural-muted flex items-center gap-2">
+          {isSemanticSearching ? (
+            <>
+              <span className="w-3 h-3 border-2 border-natural-primary border-t-transparent rounded-full animate-spin" />
+              语义搜索中...
+            </>
+          ) : (
+            <span>语义搜索结果 · 按相似度排序</span>
+          )}
+        </div>
+      )}
 
       {posts.length > 0 ? (
         <>

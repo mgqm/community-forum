@@ -15,11 +15,17 @@ import ScrollToTop from './components/ScrollToTop';
 
 function Home() {
   const [searchQuery, setSearchQuery] = React.useState('');
+  const [searchMode, setSearchMode] = React.useState<'keyword' | 'semantic'>('keyword');
 
   return (
     <div className="min-h-screen bg-natural-bg font-sans selection:bg-natural-primary/20 selection:text-natural-primary">
-      <Navbar searchQuery={searchQuery} setSearchQuery={setSearchQuery} />
-      
+      <Navbar
+        searchQuery={searchQuery}
+        setSearchQuery={setSearchQuery}
+        searchMode={searchMode}
+        setSearchMode={setSearchMode}
+      />
+
       <main className="max-w-xl mx-auto px-4 pt-12">
         {/* Welcome Section */}
         <div className="mb-10 space-y-3">
@@ -32,7 +38,7 @@ function Home() {
         </div>
 
         <CreatePost />
-        <PostList searchQuery={searchQuery} />
+        <PostList searchQuery={searchQuery} searchMode={searchMode} />
       </main>
 
       {/* Footer */}
