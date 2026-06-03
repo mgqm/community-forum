@@ -291,20 +291,42 @@ export const forumService = {
     }
   },
 
-  async markAsRead(conversationId: string) {
-    const user = getCurrentUser();
-    if (!user) return;
-    
+  async getConversations() {
+    const token = localStorage.getItem('auth_token');
     try {
-      const convRef = doc(db, 'conversations', conversationId);
-      const convSnap = await getDoc(convRef);
-      if (convSnap.exists()) {
-        const unreadCount = convSnap.data().unreadCount || {};
-        if (unreadCount[user.uid] > 0) {
-          unreadCount[user.uid] = 0;
-          await updateDoc(convRef, { unreadCount });
-        }
-      }
+      const res = await fetch('/api/messages/list', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || '加载失败');
+      return data.conversations || [];
+    } catch (error: any) {
+      throw new Error(error.message || '加载失败');
+    }
+  },
+
+  async getMessages(conversationId: string) {
+    const token = localStorage.getItem('auth_token');
+    try {
+      const res = await fetch(`/api/messages/list?conversationId=${conversationId}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || '加载失败');
+      return data.messages || [];
+    } catch (error: any) {
+      throw new Error(error.message || '加载失败');
+    }
+  },
+
+  async markAsRead(conversationId: string) {
+    const token = localStorage.getItem('auth_token');
+    try {
+      await fetch('/api/messages/read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ conversationId })
+      });
     } catch (e) {
       console.error(e);
     }
