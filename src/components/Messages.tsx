@@ -6,6 +6,7 @@ import { useAuth } from '../context/AuthContext';
 import { useCollection, useDocument } from 'react-firebase-hooks/firestore';
 import { db } from '../lib/firebase';
 import { collection, query, where, orderBy, doc, limit } from 'firebase/firestore';
+import UserAvatar from './UserAvatar';
 import { forumService } from '../services/forumService';
 import { ArrowLeft, Send, MoreVertical, CheckCircle2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -50,7 +51,7 @@ export default function Messages() {
             <h1 className="text-2xl font-serif font-bold text-natural-text">收件箱</h1>
           </div>
           <Link to={`/profile/${user.uid}`} className="w-10 h-10 rounded-full overflow-hidden border-2 border-natural-bg shrink-0">
-             <img src={user.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${user.uid}`} alt="" className="w-full h-full object-cover" />
+             <UserAvatar uid={user.uid} fallback={user.photoURL} className="w-full h-full object-cover" />
           </Link>
         </div>
         

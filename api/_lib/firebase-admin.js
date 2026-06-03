@@ -1,13 +1,14 @@
 // Vercel Serverless Functions - Firebase Admin 初始化（服务端）
 // 使用环境变量中的服务账号 JSON 访问 Firestore
 import admin from 'firebase-admin';
+import { getFirestore } from 'firebase-admin/firestore';
 
+const FIRESTORE_DB = 'ai-studio-686c5c34-1374-462f-bdc8-7acb2e72f682';
 let adminApp = null;
 
-function getAdminApp() {
+export function getAdminApp() {
   if (adminApp) return adminApp;
 
-  // 从环境变量中解析服务账号 JSON
   const saJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
   if (!saJson || saJson === '{"type":"service_account","project_id":"..."}') {
     throw new Error('未配置 FIREBASE_SERVICE_ACCOUNT_JSON 环境变量');
@@ -25,7 +26,7 @@ function getAdminApp() {
 }
 
 export function getDb() {
-  return getAdminApp().firestore('ai-studio-686c5c34-1374-462f-bdc8-7acb2e72f682');
+  return getFirestore(getAdminApp(), FIRESTORE_DB);
 }
 
 export function getAuth() {

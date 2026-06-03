@@ -14,6 +14,7 @@ import { checkContent } from '../services/ml/contentModeration';
 import ModerationWarning from './ml/ModerationWarning';
 import { smartCategorize } from '../services/ml/smartCategorization';
 import CategoryBadge from './ml/CategoryBadge';
+import UserAvatar from './UserAvatar';
 
 // Notification Bell Component
 export function Notifications() {
@@ -141,7 +142,7 @@ function MessageBadge({ userId }: { userId: string }) {
 export function LoginModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) {
   const { login, register } = useAuth();
   const [isRegisterMode, setIsRegisterMode] = React.useState(false);
-  const [email, setEmail] = React.useState('');
+  const [username, setUsername] = React.useState('');
   const [password, setPassword] = React.useState('');
   const [displayName, setDisplayName] = React.useState('');
   const [isLoading, setIsLoading] = React.useState(false);
@@ -152,14 +153,14 @@ export function LoginModal({ isOpen, onClose }: { isOpen: boolean, onClose: () =
     if (!isOpen) {
       setMessage(null);
       setIsRegisterMode(false);
-      setEmail('');
+      setUsername('');
       setPassword('');
       setDisplayName('');
     }
   }, [isOpen]);
 
   // 邮箱登录/注册处理
-  const handleEmailAuth = async (e: React.FormEvent) => {
+  const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
     setMessage(null);
@@ -170,9 +171,9 @@ export function LoginModal({ isOpen, onClose }: { isOpen: boolean, onClose: () =
       }
       if (isRegisterMode) {
         if (!displayName.trim()) throw new Error('请输入昵称');
-        await register(email, password, displayName.trim());
+        await register(username, password, displayName.trim());
       } else {
-        await login(email, password);
+        await login(username, password);
       }
       onClose();
     } catch (error: any) {
@@ -188,11 +189,11 @@ export function LoginModal({ isOpen, onClose }: { isOpen: boolean, onClose: () =
     setIsLoading(true);
     try {
       try {
-        await login('admin@root.com', 'admin123456');
+        await login('admin', 'admin123456');
       } catch (e: any) {
         // 如果管理员账号不存在，自动创建
-        if (e.message.includes('邮箱或密码错误')) {
-          await register('admin@root.com', 'admin123456', 'ROOT 管理员');
+        if (e.message.includes('用户名或密码错误')) {
+          await register('admin', 'admin123456', 'ROOT 管理员');
         } else {
           throw e;
         }
@@ -242,7 +243,7 @@ export function LoginModal({ isOpen, onClose }: { isOpen: boolean, onClose: () =
             )}
 
             {/* 邮箱登录/注册表单 */}
-            <form onSubmit={handleEmailAuth} className="space-y-4 mb-6">
+            <form onSubmit={handleAuth} className="space-y-4 mb-6">
               {isRegisterMode && (
                 <input
                   type="text"
@@ -254,10 +255,10 @@ export function LoginModal({ isOpen, onClose }: { isOpen: boolean, onClose: () =
                 />
               )}
               <input
-                type="email"
-                placeholder="邮箱"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                type="text"
+                placeholder="用户名"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
                 className="w-full bg-natural-bg rounded-2xl px-5 py-3 text-xs border border-transparent focus:border-natural-primary/20 outline-none"
                 required
               />
@@ -399,7 +400,7 @@ export function Navbar({
                 <Notifications />
                 <div className="h-4 w-[1px] bg-natural-border mx-1" />
                 <Link to={`/profile/${user.uid}`} className="flex items-center gap-4">
-                  <img src={user.photoURL || undefined} alt="" className="w-10 h-10 rounded-full border-2 border-white shadow-sm" />
+                  <UserAvatar uid={user.uid} fallback={user.photoURL} className="w-10 h-10 rounded-full border-2 border-white shadow-sm" />
                 </Link>
                 <button 
                   onClick={() => logout()}
@@ -632,7 +633,7 @@ export function CreatePost() {
       >
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="flex gap-4">
-            <img src={user.photoURL || undefined} alt="" className="w-12 h-12 rounded-full border-2 border-natural-bg" />
+            <UserAvatar uid={user.uid} fallback={user.photoURL} className="w-12 h-12 rounded-full border-2 border-natural-bg" />
             <div className="flex-1 space-y-3">
               <textarea
                 value={content}
@@ -812,7 +813,7 @@ export function CommentItem({ comment, postAuthorId, postId }: { comment: any, p
   return (
     <div className="group flex gap-3 py-4 border-b border-natural-bg last:border-0 hover:bg-natural-bg/30 px-3 rounded-2xl transition-colors relative">
       <Link to={`/profile/${comment.authorId}`}>
-        <img src={comment.authorPhoto} alt="" className="w-9 h-9 rounded-full shrink-0 border border-white" />
+        <UserAvatar uid={comment.authorId} fallback={comment.authorPhoto} className="w-9 h-9 rounded-full shrink-0 border border-white" />
       </Link>
       <div className="flex-1 min-w-0 space-y-1">
         <div className="flex justify-between items-start gap-2">
@@ -986,8 +987,9 @@ export function PostCard({ post }: { post: any, key?: string }) {
     setIsFollowLoading(true);
     try {
       await forumService.toggleFollow(post.authorId, !!isFollowing);
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
+      alert('关注失败: ' + (e.message || '未知错误'));
     } finally {
       setIsFollowLoading(false);
     }
@@ -1064,11 +1066,7 @@ export function PostCard({ post }: { post: any, key?: string }) {
       <div className="p-6 flex items-center justify-between">
         <div className="flex items-center gap-4">
           <Link to={`/profile/${post.authorId}`}>
-            <img 
-              src={post.authorPhoto || 'https://api.dicebear.com/7.x/avataaars/svg?seed=' + post.authorId} 
-              alt="" 
-              className="w-12 h-12 rounded-full border-2 border-natural-bg object-cover" 
-            />
+            <UserAvatar uid={post.authorId} fallback={post.authorPhoto} className="w-12 h-12 rounded-full border-2 border-natural-bg object-cover" />
           </Link>
           <div>
             <div className="flex items-center gap-2">
@@ -1296,7 +1294,7 @@ export function PostCard({ post }: { post: any, key?: string }) {
               {/* Comment Form */}
               {user && (
                 <form onSubmit={handleCommentSubmit} className="flex gap-4">
-                  <img src={user.photoURL || undefined} alt="" className="w-10 h-10 rounded-full border border-natural-bg" />
+                  <UserAvatar uid={user.uid} fallback={user.photoURL} className="w-10 h-10 rounded-full border border-natural-bg" />
                   <div className="flex-1 flex gap-2">
                     <div className="flex-1 relative">
                       <input
@@ -1351,7 +1349,7 @@ export function PostCard({ post }: { post: any, key?: string }) {
                                 }}
                                 className="w-full flex items-center gap-2 p-2 hover:bg-natural-bg text-left transition-colors"
                               >
-                                <img src={c.authorPhoto} alt="" className="w-6 h-6 rounded-full border border-white" />
+                                <UserAvatar uid={c.authorId} fallback={c.authorPhoto} className="w-6 h-6 rounded-full border border-white" />
                                 <span className="text-xs font-medium text-natural-text truncate">{c.authorName}</span>
                               </button>
                             ))}

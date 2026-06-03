@@ -7,3 +7,6 @@ coverage/
 .env*
 !.env.example
 server/forum.db
+clean-json.txt
+deploy-rules.cjs
+extract-json.cjs

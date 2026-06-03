@@ -3,6 +3,7 @@ import React from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useCollection, useDocument } from 'react-firebase-hooks/firestore';
+import UserAvatar from './UserAvatar';
 import { db } from '../lib/firebase';
 import { collection, query, where, orderBy, doc, getDoc, getDocs } from 'firebase/firestore';
 import { PostCard } from './Forum';
@@ -89,7 +90,7 @@ function UserListItem({ userId, onSelect }: { userId: string, onSelect: () => vo
       }}
       className="w-full flex items-center gap-3 p-3 hover:bg-natural-bg rounded-2xl transition-all text-left cursor-pointer group"
     >
-      <img src={userData.photoURL || undefined} alt="" className="w-10 h-10 rounded-full object-cover border border-natural-border shadow-sm group-hover:scale-105 transition-transform" />
+      <UserAvatar uid={userData.uid} fallback={userData.photoURL} className="w-10 h-10 rounded-full object-cover border border-natural-border shadow-sm group-hover:scale-105 transition-transform" />
       <div className="flex-1 min-w-0">
         <p className="font-bold text-sm text-natural-text truncate uppercase">{userData.displayName}</p>
         <p className="text-[10px] text-natural-muted font-medium">查看主页</p>
@@ -121,18 +122,18 @@ function EditProfileModal({ isOpen, onClose, profile }: { isOpen: boolean, onClo
   const [loading, setLoading] = React.useState(false);
 
   const GIF_AVATARS = [
-    'https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExOHpneXo5eGZzeXpneXo5eGZzeXpneXo5eGZzeXpneXo5eGZzeSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/3o7TKMGpxxyrqvXvY4/giphy.gif',
-    'https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExOHpneXo5eGZzeXpneXo5eGZzeXpneXo5eGZzeXpneXo5eGZzeSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/l0HlO39YkNoV5O80M/giphy.gif',
-    'https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExOHpneXo5eGZzeXpneXo5eGZzeXpneXo5eGZzeXpneXo5eGZzeSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/3o7TKVUn7iM8FMEU24/giphy.gif',
-    'https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExOHpneXo5eGZzeXpneXo5eGZzeXpneXo5eGZzeXpneXo5eGZzeSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/3o7TKp7tO8U7GpxZ9K/giphy.gif',
-    'https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExOHpneXo5eGZzeXpneXo5eGZzeXpneXo5eGZzeXpneXo5eGZzeSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/3o7TKMGx0P5Z0Zk8ZG/giphy.gif',
-    'https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExOHpneXo5eGZzeXpneXo5eGZzeXpneXo5eGZzeXpneXo5eGZzeSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/l0HlJ8E53RUMcZqV2/giphy.gif',
-    'https://media.giphy.com/media/fveK9uBVrASPUK3NAt/giphy.gif',
-    'https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExOHpneXo5eGZzeXpneXo5eGZzeXpneXo5eGZzeXpneXo5eGZzeSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/vfkv9HNBpWfzq/giphy.gif',
-    'https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExOHpneXo5eGZzeXpneXo5eGZzeXpneXo5eGZzeXpneXo5eGZzeSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/S9pB16zYfK5fL0I5Qf/giphy.gif',
-    'https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExOHpneXo5eGZzeXpneXo5eGZzeXpneXo5eGZzeXpneXo5eGZzeSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/13st7qhSyS6yFq/giphy.gif',
-    'https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExOHpneXo5eGZzeXpneXo5eGZzeXpneXo5eGZzeXpneXo5eGZzeSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/BzyTuYCmvSORqs1ABM/giphy.gif',
-    'https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExOHpneXo5eGZzeXpneXo5eGZzeXpneXo5eGZzeXpneXo5eGZzeSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/JIX9t2j0ZTN9S/giphy.gif'
+    'https://api.dicebear.com/7.x/bottts/svg?seed=a1',
+    'https://api.dicebear.com/7.x/bottts/svg?seed=b2',
+    'https://api.dicebear.com/7.x/micah/svg?seed=c3',
+    'https://api.dicebear.com/7.x/micah/svg?seed=d4',
+    'https://api.dicebear.com/7.x/croodles/svg?seed=e5',
+    'https://api.dicebear.com/7.x/croodles/svg?seed=f6',
+    'https://api.dicebear.com/7.x/personas/svg?seed=g7',
+    'https://api.dicebear.com/7.x/personas/svg?seed=h8',
+    'https://api.dicebear.com/7.x/lorelei/svg?seed=i9',
+    'https://api.dicebear.com/7.x/lorelei/svg?seed=j10',
+    'https://api.dicebear.com/7.x/notionists/svg?seed=k11',
+    'https://api.dicebear.com/7.x/notionists/svg?seed=l12'
   ];
 
   const handleSave = async () => {
@@ -142,7 +143,7 @@ function EditProfileModal({ isOpen, onClose, profile }: { isOpen: boolean, onClo
       onClose();
     } catch (e) {
       console.error(e);
-      alert('保存失败');
+      alert('保存失败: ' + (e instanceof Error ? e.message : String(e)));
     } finally {
       setLoading(false);
     }
@@ -352,9 +353,9 @@ export default function UserProfile() {
         {/* Profile Card */}
         <div className="bg-white rounded-[32px] p-8 border border-natural-border shadow-sm mb-8">
           <div className="flex flex-col items-center text-center">
-            <img 
-              src={profile.photoURL || undefined} 
-              alt="" 
+            <UserAvatar
+              uid={userId}
+              fallback={profile.photo_url || profile.photoURL}
               className="w-24 h-24 rounded-full border-4 border-natural-bg shadow-md mb-4 object-cover"
             />
             <h1 className="text-2xl font-serif font-bold text-natural-text mb-1">{profile.displayName}</h1>

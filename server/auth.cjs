@@ -48,32 +48,32 @@ function authMiddleware(req, res, next) {
 // POST /api/auth/register - 用户注册
 router.post('/register', async (req, res) => {
   try {
-    const { email, password, displayName } = req.body;
+    const { username, password, displayName } = req.body;
     const db = await getDb();
 
     // 参数校验
-    if (!email || !password || !displayName) {
-      return res.status(400).json({ error: '邮箱、密码和昵称为必填项' });
+    if (!username || !password || !displayName) {
+      return res.status(400).json({ error: '用户名、密码和昵称为必填项' });
     }
     if (password.length < 6) {
       return res.status(400).json({ error: '密码长度至少需要 6 个字符' });
     }
 
-    // 检查邮箱是否已被注册
-    const existing = queryOne(db, 'SELECT id FROM users WHERE email = ?', [email]);
+    // 检查用户名是否已被注册
+    const existing = queryOne(db, 'SELECT id FROM users WHERE username = ?', [username]);
     if (existing) {
-      return res.status(409).json({ error: '该邮箱已被注册' });
+      return res.status(409).json({ error: '该用户名已被注册' });
     }
 
     // 创建新用户
     const uid = generateUid();
     const passwordHash = bcrypt.hashSync(password, 10);
     const photoUrl = `https://api.dicebear.com/7.x/avataaars/svg?seed=${uid}`;
-    const role = email === 'admin@root.com' ? 'admin' : 'user';
+    const role = username === 'admin' ? 'admin' : 'user';
 
     db.run(
-      'INSERT INTO users (id, email, password_hash, display_name, photo_url, role) VALUES (?, ?, ?, ?, ?, ?)',
-      [uid, email, passwordHash, displayName, photoUrl, role]
+      'INSERT INTO users (id, email, username, password_hash, display_name, photo_url, role) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [uid, username, username, passwordHash, displayName, photoUrl, role]
     );
     saveDb(); // 持久化到磁盘
 
@@ -98,23 +98,26 @@ router.post('/register', async (req, res) => {
 // POST /api/auth/login - 用户登录
 router.post('/login', async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { username, password } = req.body;
     const db = await getDb();
 
-    if (!email || !password) {
-      return res.status(400).json({ error: '请输入邮箱和密码' });
+    if (!username || !password) {
+      return res.status(400).json({ error: '请输入用户名和密码' });
     }
 
-    // 查找用户
-    const user = queryOne(db, 'SELECT * FROM users WHERE email = ?', [email]);
+    // 查找用户（支持用户名或邮箱）
+    let user = queryOne(db, 'SELECT * FROM users WHERE username = ?', [username]);
     if (!user) {
-      return res.status(401).json({ error: '邮箱或密码错误' });
+      user = queryOne(db, 'SELECT * FROM users WHERE email = ?', [username]);
+    }
+    if (!user) {
+      return res.status(401).json({ error: '用户名或密码错误' });
     }
 
     // 验证密码
     const validPassword = bcrypt.compareSync(password, user.password_hash);
     if (!validPassword) {
-      return res.status(401).json({ error: '邮箱或密码错误' });
+      return res.status(401).json({ error: '用户名或密码错误' });
     }
 
     // 生成 JWT token

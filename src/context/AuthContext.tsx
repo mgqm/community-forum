@@ -47,11 +47,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   // 登录
-  const login = useCallback(async (email: string, password: string) => {
+  const login = useCallback(async (username: string, password: string) => {
     const res = await fetch(`${API_BASE}/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password })
+      body: JSON.stringify({ username, password })
     });
 
     const data = await res.json();
@@ -62,11 +62,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   // 注册
-  const register = useCallback(async (email: string, password: string, displayName: string) => {
+  const register = useCallback(async (username: string, password: string, displayName: string) => {
     const res = await fetch(`${API_BASE}/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password, displayName })
+      body: JSON.stringify({ username, password, displayName })
     });
 
     const data = await res.json();
@@ -102,14 +102,16 @@ export function getCurrentUser(): AppUser | null {
   const token = localStorage.getItem('auth_token');
   if (!token) return null;
   try {
-    // 解析 JWT payload 获取用户信息（不验证签名，仅用于快速获取）
-    const payload = JSON.parse(atob(token.split('.')[1]));
+    // JWT payload 使用 base64url 编码，需转为标准 base64
+    const base64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+    const json = decodeURIComponent(escape(atob(base64)));
+    const payload = JSON.parse(json);
     return {
       uid: payload.uid,
-      email: payload.email,
-      displayName: payload.displayName,
-      photoURL: payload.photoURL,
-      role: payload.role
+      email: payload.email || '',
+      displayName: payload.displayName || '',
+      photoURL: payload.photoURL || '',
+      role: payload.role || 'user'
     };
   } catch {
     return null;

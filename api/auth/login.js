@@ -8,22 +8,31 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { email, password } = req.body;
+    const { username, email, password } = req.body;
+    const loginName = username || email; // 兼容新旧前端
 
-    if (!email || !password) {
-      return res.status(400).json({ error: '请输入邮箱和密码' });
+    if (!loginName || !password) {
+      return res.status(400).json({ error: '请输入用户名和密码' });
     }
 
     const db = getDb();
 
-    // 查找用户
-    const snapshot = await db.collection('users')
-      .where('email', '==', email)
+    // 查找用户（支持用户名或邮箱登录）
+    let snapshot = await db.collection('users')
+      .where('username', '==', loginName)
       .limit(1)
       .get();
 
     if (snapshot.empty) {
-      return res.status(401).json({ error: '邮箱或密码错误' });
+      // 兼容旧数据：尝试用 email 字段查找
+      snapshot = await db.collection('users')
+        .where('email', '==', loginName)
+        .limit(1)
+        .get();
+    }
+
+    if (snapshot.empty) {
+      return res.status(401).json({ error: '用户名或密码错误' });
     }
 
     const userDoc = snapshot.docs[0];
@@ -31,13 +40,13 @@ export default async function handler(req, res) {
 
     // 验证密码
     if (!verifyPassword(password, user.password_hash)) {
-      return res.status(401).json({ error: '邮箱或密码错误' });
+      return res.status(401).json({ error: '用户名或密码错误' });
     }
 
     // 生成 JWT
     const token = signToken({
       uid: user.id,
-      email: user.email,
+      email: user.email || user.username,
       displayName: user.display_name,
       photoURL: user.photo_url,
       role: user.role
@@ -48,7 +57,7 @@ export default async function handler(req, res) {
       token,
       user: {
         uid: user.id,
-        email: user.email,
+        email: user.email || user.username,
         displayName: user.display_name,
         photoURL: user.photo_url,
         bio: user.bio || '',
